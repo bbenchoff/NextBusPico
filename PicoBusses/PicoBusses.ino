@@ -1,130 +1,128 @@
-/****************************************************************************************************************************
-  WebClient.ino - Simple Arduino web server sample for Ethernet shield
-
-  Ethernet_Generic is a library for the W5x00 Ethernet shields trying to merge the good features of
-  previous Ethernet libraries
-
-  Built by Khoi Hoang https://github.com/khoih-prog/Ethernet_Generic
- *****************************************************************************************************************************/
-
-#include "defines.h"
+#include <SPI.h>
+#include <EthernetLarge.h>
 #include <SSLClient.h>
 #include "trust_anchors.h"
-#include <ArduinoUniqueID.h>
 
-char server[] = "arduino.cc";
-byte macAddress[] = {};
-String uniqueIDString = "";
-String MACAddress = "";
+// Enter a MAC address for your controller below.
+// Newer Ethernet shields have a MAC address printed on a sticker on the shield
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
 
-// Initialize the Ethernet client object
-EthernetClient baseclient;
-SSLClient client(baseclient, TAs, (size_t)TAs_NUM, 1);
+// if you don't want to use DNS (and reduce your sketch size)
+// use the numeric IP instead of the name for the server:
+//IPAddress server(54,85,55,79);  // numeric IP for Google (no DNS)
+const char server[] = "api.511.org";    // name address for Arduino (using DNS)
+const char server_host[] = "api.511.org"; // leave this alone, change only above two
 
-void setup()
-{
-  // Read unique ID string, write to uniqueIDString
-  for (size_t i = 0; i < 8; i++) {
-    if (UniqueID8[i] < 0x10) {
-      uniqueIDString += "0";
-    }
-    uniqueIDString += String(UniqueID8[i], HEX);
-  }
+// Set the static IP address to use if the DHCP fails to assign
+IPAddress ip(192, 168, 0, 177);
+IPAddress myDns(8, 8, 8, 8);
 
-  // Use the unique ID to set the MAC address
-  if (uniqueIDString.length() >= 12) {
-  // Loop through the last 6 bytes of the string
-    for (size_t i = 0; i < 6; i++) {
-      // Extract two characters (one byte in hex)
-      String hexByteStr = uniqueIDString.substring(uniqueIDString.length() - 12 + i * 2, uniqueIDString.length() - 10 + i * 2);
-      
-      // Convert the hex string to a byte
-      byte hexByte = (byte) strtol(hexByteStr.c_str(), NULL, 16);
+// Choose the analog pin to get semi-random data from for SSL
+// Pick a pin that's not connected or attached to a randomish voltage source
+const int rand_pin = 26;
 
-      // Assign this byte to the mac array
-      macAddress[i] = hexByte;
-    }
-  }
+// Initialize the SSL client library
+// We input an EthernetClient, our trust anchors, and the analog pin
+EthernetClient base_client;
+SSLClient client(base_client, TAs, (size_t)TAs_NUM, rand_pin);
+// Variables to measure the speed
+unsigned long beginMicros, endMicros;
+unsigned long byteCount = 0;
+bool printWebData = true;  // set to false for better speed measurement
 
-  // Finally, set the String MACAddress to the mac I just generated. Yes,
-  // we're doing it this way.
-  for (int i = 0; i < 6; i++) {
-    // Convert the byte to a hexadecimal string
-    if (macAddress[i] < 16) {
-        // Adding leading zero for bytes less than 16 (0x10)
-        MACAddress += "0";
-    }
-    MACAddress += String(macAddress[i], HEX);
+void setup() {
+
+  Ethernet.init(17);  
+  // Open serial communications and wait for port to open:
+  Serial.begin(115200);
+  while (!Serial) {
+    ; // wait for serial port to connect. Needed for native USB port only
   }
   
-  MACAddress.toUpperCase();
-  SerialDebug.begin(115200);
-  while (!Serial && millis() < 5000);
-  delay(500);
-
-  Ethernet.init(17);  // For w5500-evb-pico
-  Ethernet.begin(macAddress);
-
-  SerialDebug.print(F("Connected! IP address: "));
-  SerialDebug.println(Ethernet.localIP());
-
-  if ( (Ethernet.getChip() == w5500) || (Ethernet.getChip() == w6100) || (Ethernet.getAltChip() == w5100s) )
-  {
-    if (Ethernet.getChip() == w6100)
-      SerialDebug.print(F("W6100 => "));
-    else if (Ethernet.getChip() == w5500)
-      SerialDebug.print(F("W6100 => "));
-    else
-      SerialDebug.print(F("W5100S => "));
-    
-    SerialDebug.print(F("Speed: "));
-    SerialDebug.print(Ethernet.speedReport());
-    SerialDebug.print(F(", Duplex: "));
-    SerialDebug.print(Ethernet.duplexReport());
-    SerialDebug.print(F(", Link status: "));
-    SerialDebug.println(Ethernet.linkReport());
+  // start the Ethernet connection:
+  Serial.println("Initialize Ethernet with DHCP:");
+  if (Ethernet.begin(mac) == 0) {
+    Serial.println("Failed to configure Ethernet using DHCP");
+    // Check for Ethernet hardware present
+    if (Ethernet.hardwareStatus() == EthernetNoHardware) {
+      Serial.println("Ethernet shield was not found.  Sorry, can't run without hardware. :(");
+      while (true) {
+        delay(1); // do nothing, no point running without Ethernet hardware
+      }
+    }
+    if (Ethernet.linkStatus() == LinkOFF) {
+      Serial.println("Ethernet cable is not connected.");
+    }
+    // try to configure using IP address instead of DHCP:
+    Ethernet.begin(mac, ip, myDns);
+  } else {
+    Serial.print("  DHCP assigned IP ");
+    Serial.println(Ethernet.localIP());
   }
+  // give the Ethernet shield a second to initialize:
+  delay(1000);
+  
+  Serial.print("connecting to ");
+  Serial.print(server);
+  Serial.println("...");
 
-  SerialDebug.println();
-  SerialDebug.println(F("Starting connection to server..."));
-
-  // if you get a connection, report back via serial
-  if (client.connect(server, 443))
-  {
-    SerialDebug.println(F("Connected to server"));
-    // Make a HTTP request
-    client.println(F("GET /asciilogo.txt HTTP/1.1"));
-    client.println(F("Host: arduino.tips"));
-    client.println(F("Connection: close"));
+  // if you get a connection, report back via serial:
+  auto start = millis();
+  // specify the server and port, 443 is the standard port for HTTPS
+  if (client.connect(server, 443)) {
+    auto time = millis() - start;
+    Serial.print("Took: ");
+    Serial.println(time);
+    // Make a HTTP request:
+    client.println("GET /transit/StopMonitoring?api_key=da03f504-fc16-43e7-a736-319af37570be&agency=SF&stopCode=16633&format=json HTTP/1.1");
+    client.println("User-Agent: SSLClientOverEthernet");
+    client.println("Accept: application/json");
+    //client.println("Accept-Encoding: identity");
+    client.print("Host: ");
+    client.println(server_host);
+    client.println("Connection: close");
     client.println();
+  } else {
+    // if you didn't get a connection to the server:
+    Serial.println("connection failed");
   }
+  beginMicros = micros();
 }
 
-void printoutData()
-{
+void loop() {
   // if there are incoming bytes available
-  // from the server, read them and print them
-  while (client.available())
-  {
-    char c = client.read();
-    SerialDebug.write(c);
-    SerialDebug.flush();
+  // from the server, read them and print them:
+  int len = client.available();
+  if (len > 0) {
+    byte buffer[80];
+    if (len > 80) len = 80;
+    client.read(buffer, len);
+    if (printWebData) {
+      Serial.write(buffer, len); // show in the serial monitor (slows some boards)
+    }
+    byteCount = byteCount + len;
   }
-}
 
-void loop()
-{
-  printoutData();
-
-  // if the server's disconnected, stop the client
-  if (!client.connected())
-  {
-    SerialDebug.println();
-    SerialDebug.println(F("Disconnecting from server..."));
+  // if the server's disconnected, stop the client:
+  if (!client.connected()) {
+    endMicros = micros();
+    Serial.println();
+    Serial.println("disconnecting.");
     client.stop();
+    Serial.print("Received ");
+    Serial.print(byteCount);
+    Serial.print(" bytes in ");
+    float seconds = (float)(endMicros - beginMicros) / 1000000.0;
+    Serial.print(seconds, 4);
+    float rate = (float)byteCount / seconds / 1000.0;
+    Serial.print(", rate = ");
+    Serial.print(rate);
+    Serial.print(" kbytes/second");
+    Serial.println();
 
-    // do nothing forevermore
-    while (true)
-      yield();
+    // do nothing forevermore:
+    while (true) {
+      delay(1);
+    }
   }
 }
