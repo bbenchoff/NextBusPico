@@ -2,6 +2,13 @@
 #include <EthernetLarge.h>
 #include <SSLClient.h>
 #include "trust_anchors.h"
+#include "miniz.h"
+
+#define RESPONSE_BUFFER_SIZE 4096 // Adjust based on your expected response size
+#define ETHERNET_LARGE_BUFFERS
+
+byte gzippedResponse[RESPONSE_BUFFER_SIZE];
+size_t responseIndex = 0;
 
 // Enter a MAC address for your controller below.
 // Newer Ethernet shields have a MAC address printed on a sticker on the shield
@@ -29,6 +36,8 @@ SSLClient client(base_client, TAs, (size_t)TAs_NUM, rand_pin);
 unsigned long beginMicros, endMicros;
 unsigned long byteCount = 0;
 bool printWebData = true;  // set to false for better speed measurement
+
+void decompressGzippedData(const uint8_t *gzippedData, size_t gzippedDataSize);
 
 void setup() {
 
@@ -90,22 +99,55 @@ void setup() {
 }
 
 void loop() {
-  // if there are incoming bytes available
-  // from the server, read them and print them:
-  int len = client.available();
-  if (len > 0) {
-    byte buffer[80];
-    if (len > 80) len = 80;
-    client.read(buffer, len);
-    if (printWebData) {
-      Serial.write(buffer, len); // show in the serial monitor (slows some boards)
-    }
-    byteCount = byteCount + len;
-  }
+  // Assuming 'client' is already connected and has made a request.
+  String line;
+  bool isGzip = false;
+  bool headersFinished = false; // Flag to indicate when headers are completely read.
 
+  // Read and discard headers
+  while (client.available()) {
+    line = client.readStringUntil('\n');
+    Serial.println(line);
+
+    // Check for gzip encoding in headers
+    if (line.startsWith("Content-Encoding: gzip")) {
+      isGzip = true;
+    }
+
+    // Check if we've reached the end of the headers
+    if (line == "\r") {
+      headersFinished = true;
+      break; // Exit the loop as headers are done.
+    }
+  }
+    
+    
+  if (isGzip) {
+    // New loop to read data until connection is closed
+    while (client.connected() || client.available()) {
+      while (client.available()) {
+        byte buffer[16384]; // Adjust size as needed
+        int bytesRead = client.read(buffer, sizeof(buffer));
+        if (bytesRead > 0) {
+          // Ensure we do not overflow the gzippedResponse buffer
+          size_t toCopy = min(bytesRead, RESPONSE_BUFFER_SIZE - responseIndex);
+          memcpy(gzippedResponse + responseIndex, buffer, toCopy);
+          responseIndex += toCopy;
+          byteCount += bytesRead;
+        }
+      }
+      // Small delay to wait for more data
+      //delay(10);
+    }
+  }
+  
   // if the server's disconnected, stop the client:
   if (!client.connected()) {
     endMicros = micros();
+    if (responseIndex > 0) {
+      decompressGzippedData(gzippedResponse, responseIndex);
+    }
+
     Serial.println();
     Serial.println("disconnecting.");
     client.stop();
@@ -125,4 +167,40 @@ void loop() {
       delay(1);
     }
   }
+}
+
+
+void decompressGzippedData(const uint8_t *gzippedData, size_t gzippedDataSize) {
+    // Assume a maximum expected uncompressed size
+    Serial.print("Attempting to decompress data of size: ");
+    Serial.println(gzippedDataSize);
+
+  // Log the first few bytes of the data to confirm it looks like gzip
+  Serial.print("Data starts with: ");
+  for (int i = 0; i < 800 && i < gzippedDataSize; i++) {
+      if (gzippedData[i] < 16) Serial.print("0x0"); // Add leading zero for bytes less than 0x10
+      else Serial.print("0x");
+      Serial.print(gzippedData[i], HEX);
+      if (i < 799 && i < gzippedDataSize - 1) Serial.print(", "); // Add comma and space except after the last item
+  }
+  Serial.println();
+
+    mz_ulong uncompressedSize = 4096;
+    uint8_t *uncompressedData = (uint8_t *)malloc(uncompressedSize);
+
+    if (uncompressedData == NULL) {
+        Serial.println("Failed to allocate memory for decompression.");
+        return;
+    }
+
+    int status = mz_uncompress(uncompressedData, &uncompressedSize, gzippedData, gzippedDataSize);
+    if (status == MZ_OK) {
+        Serial.println("Decompression successful.");
+        Serial.write(uncompressedData, uncompressedSize);
+    } else {
+        Serial.print("Decompression failed: ");
+        Serial.println(status);
+    }
+
+    free(uncompressedData);
 }
