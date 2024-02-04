@@ -32,7 +32,7 @@ if response.status_code == 200:
     # Assuming you want the next two buses
     next_two_buses_arrival_times = arrival_times[:3]
 
-    print("Arrival times of the next two buses:", next_two_buses_arrival_times)
+    print("Arrival times of the next three buses:", next_two_buses_arrival_times)
 else:
     print(f"Failed to retrieve data. Status code: {response.status_code}")
     print(response.text)
