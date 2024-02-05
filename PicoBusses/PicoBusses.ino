@@ -4,6 +4,9 @@
 #include "trust_anchors.h"
 #include "miniz.h"
 #include <ArduinoUniqueID.h>
+#include <NTPClient.h>
+#include <EthernetUdp.h>
+
 
 #define RESPONSE_BUFFER_SIZE 2048 // Adjust based on your expected response size
 #define ETHERNET_LARGE_BUFFERS
@@ -19,6 +22,10 @@ String MACAddress = "";
 
 const char server[] = "api.511.org";
 const char server_host[] = "api.511.org";
+
+EthernetUDP Udp;
+
+NTPClient timeClient(Udp);
 
 // Set the static IP address to use if the DHCP fails to assign
 IPAddress ip(192, 168, 0, 177);
@@ -41,10 +48,14 @@ SSLClient client(base_client, TAs, (size_t)TAs_NUM, rand_pin);
 // Variables to measure the speed
 unsigned long beginMicros, endMicros;
 unsigned long byteCount = 0;
-bool printWebData = true;  
+ 
 
 void decompressGzippedData(const uint8_t *gzippedData, size_t gzippedDataSize);
 uint32_t getUncompressedLength(const uint8_t* data, size_t dataSize);
+
+// Determine the size of the JSON document
+// Add extra space to accommodate the structure of the JSON
+//DynamicJsonDocument doc(8000);
 
 void setup() {
 
@@ -85,11 +96,11 @@ void setup() {
   // Open serial communications and wait for port to open:
   Serial.begin(115200);
   
-  /*
+  
   while (!Serial) {
     ; // wait for serial port to connect. Needed for native USB port only
   }
-  */
+  
   
   // start the Ethernet connection:
   Serial.println("Initialize Ethernet with DHCP:");
@@ -115,36 +126,81 @@ void setup() {
   // give the Ethernet shield a second to initialize:
   delay(1000);
 
-  Serial.print("connecting to ");
-  Serial.print(server);
-  Serial.println("...");
+  Udp.begin(8888);
 
-  // if you get a connection, report back via serial:
-  auto start = millis();
-  // specify the server and port, 443 is the standard port for HTTPS
-  if (client.connect(server, 443)) {
-    auto time = millis() - start;
-    Serial.print("Took: ");
-    Serial.println(time);
-    // Make a HTTP request:
-    String getLine = ("GET /transit/StopMonitoring?api_key=" + APIkey + "&agency=SF&stopCode=" + stopCodes[0] + "&format=xml HTTP/1.1");
-    client.println(getLine);
-    client.println("User-Agent: RP2040 / W5500-EVB-Pico SSLClientOverEthernet");
-    client.print("Host: ");
-    client.println(server_host);
-    client.println("Connection: close");
-    client.println();
-  } else {
-    // if you didn't get a connection to the server:
-    Serial.println("connection failed");
-  }
-  beginMicros = micros();
+  timeClient.begin();
 }
   
-
-
 void loop() {
-  
+
+  timeClient.update();
+
+  Serial.println(timeClient.getFormattedTime());
+
+  getData();
+  Serial.println(extractExpectedArrivalTime(globalUncompressedDataStr));
+  delay(10000);
+}
+
+String extractExpectedArrivalTime(String data) {
+  String searchKey = "\"ExpectedArrivalTime\":\"";
+  int startIndex = 0;
+  int endIndex = 0;
+  String result = "";
+
+  // Search for all occurrences of the key
+  startIndex = data.indexOf(searchKey, startIndex);
+  while (startIndex != -1) {
+    // Adjust startIndex to get the actual starting position of the value
+    startIndex += searchKey.length();
+
+    // Find the end of the value
+    endIndex = data.indexOf("\"", startIndex);
+
+    // Extract the value
+    String arrivalTime = data.substring(startIndex, endIndex);
+
+    // Add extracted value to the result string
+    if (result.length() > 0) {
+      result += ", ";  // Separate multiple values with a comma
+    }
+    result += arrivalTime;
+
+    // Prepare for the next iteration
+    startIndex = data.indexOf(searchKey, endIndex);
+  }
+
+  return result;
+}
+
+void getData(void)
+{
+  //only attempt a new connection if the client is not currently connected
+  if (!client.connected())
+  {
+    Serial.print("connecting to ");
+    Serial.print(server);
+    Serial.println("...");
+
+    auto start = millis();
+
+      // specify the server and port, 443 is the standard port for HTTPS
+    if (client.connect(server, 443)) {
+      // Make a HTTP request:
+      String getLine = ("GET /transit/StopMonitoring?api_key=" + APIkey + "&agency=SF&stopCode=" + stopCodes[0] + "&format=json HTTP/1.1");
+      client.println(getLine);
+      client.println("User-Agent: RP2040 / W5500-EVB-Pico SSLClientOverEthernet");
+      client.print("Host: ");
+      client.println(server_host);
+      client.println("Connection: close");
+      client.println();
+    } else {
+      // if you didn't get a connection to the server:
+      Serial.println("connection failed");
+      return; //exit the loop early, there's nothign to do
+    }
+  }
+
   // Assuming 'client' is already connected and has made a request.
   String line;
   bool isGzip = false;
@@ -154,19 +210,18 @@ void loop() {
   while (client.available()) {
     line = client.readStringUntil('\n');
     Serial.println(line);
-
     // Check for gzip encoding in headers
     if (line.startsWith("Content-Encoding: gzip")) {
       isGzip = true;
     }
-
     // Check if we've reached the end of the headers
     if (line == "\r") {
       headersFinished = true;
       break; // Exit the loop as headers are done.
     }
   }
-    
+  
+  //If we have a gzip response, we're probably getting data
   if (isGzip) {
     // New loop to read data until connection is closed
     while (client.connected() || client.available()) {
@@ -186,24 +241,15 @@ void loop() {
   
   // if the server's disconnected, stop the client:
   if (!client.connected()) {
-    endMicros = micros();
     if (responseIndex > 0) {
       decompressGzippedData(gzippedResponse, responseIndex);
+      responseIndex = 0;
     }
-
     Serial.println("disconnecting.");
     client.stop();
-    Serial.print("Received ");
-    Serial.print(byteCount);
-    Serial.print(" bytes decompressed to ");
-    Serial.print(globalUncompressedDataStr.length());
-    Serial.println();
+  }
 
-    // do nothing forevermore:
-    while (true) {
-      delay(1);
-    }
-  } 
+  //delay(1000);
 }
 
 void decompressGzippedData(const uint8_t *gzippedData, size_t gzippedDataSize) {
@@ -242,7 +288,7 @@ void decompressGzippedData(const uint8_t *gzippedData, size_t gzippedDataSize) {
         
         Serial.write(uncompressedData, outBytes);
         // print the String or its size
-        Serial.println("\nUncompressed Data Size: " + String(globalUncompressedDataStr.length()));
+        //Serial.println("\nUncompressed Data Size: " + String(globalUncompressedDataStr.length()));
     }
 
     free(uncompressedData);
