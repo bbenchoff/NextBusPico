@@ -107,7 +107,7 @@
    * Important: For best perf. be sure to customize the below macros for your target platform:
      #define MINIZ_USE_UNALIGNED_LOADS_AND_STORES 1 */
      #define MINIZ_LITTLE_ENDIAN 1
-     #define MINIZ_HAS_64BIT_REGISTERS 1      
+     #define MINIZ_HAS_64BIT_REGISTERS 0      
 /*
    * On platforms using glibc, Be sure to "#define _LARGEFILE64_SOURCE 1" before including miniz.c to ensure miniz
      uses the 64-bit variants: fopen64(), stat64(), etc. Otherwise you won't be able to process large files

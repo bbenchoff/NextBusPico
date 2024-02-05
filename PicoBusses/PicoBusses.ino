@@ -6,6 +6,7 @@
 #include <ArduinoUniqueID.h>
 #include <NTPClient.h>
 #include <EthernetUdp.h>
+#include <TimeLib.h>
 
 
 #define RESPONSE_BUFFER_SIZE 2048 // Adjust based on your expected response size
@@ -134,15 +135,34 @@ void setup() {
 void loop() {
 
   timeClient.update();
+  time_t currentTime = timeClient.getEpochTime();
 
   Serial.println(timeClient.getFormattedTime());
 
   getData();
-  Serial.println(extractExpectedArrivalTime(globalUncompressedDataStr));
+  Serial.println(extractExpectedArrivalTime(globalUncompressedDataStr, currentTime));
   delay(10000);
 }
 
-String extractExpectedArrivalTime(String data) {
+time_t iso8601ToEpoch(String datetime) {
+    tmElements_t tm;
+
+    int Year, Month, Day, Hour, Minute, Second;
+    sscanf(datetime.c_str(), "%d-%d-%dT%d:%d:%dZ", &Year, &Month, &Day, &Hour, &Minute, &Second);
+
+    tm.Year = Year - 1970; // tmElements_t.Year is the number of years since 1970
+    tm.Month = Month;
+    tm.Day = Day;
+    tm.Hour = Hour;
+    tm.Minute = Minute;
+    tm.Second = Second;
+
+    return makeTime(tm); // Converts to time_t
+}
+
+
+
+String extractExpectedArrivalTime(String data, time_t currentTime) {
   String searchKey = "\"ExpectedArrivalTime\":\"";
   int startIndex = 0;
   int endIndex = 0;
@@ -158,13 +178,17 @@ String extractExpectedArrivalTime(String data) {
     endIndex = data.indexOf("\"", startIndex);
 
     // Extract the value
-    String arrivalTime = data.substring(startIndex, endIndex);
+    String arrivalTimeISO8601 = data.substring(startIndex, endIndex);
+    time_t arrivalEpoch = iso8601ToEpoch(arrivalTimeISO8601);
+
+    // Calculate difference in minutes
+    long minutesUntilArrival = (arrivalEpoch - currentTime) / 60;
 
     // Add extracted value to the result string
     if (result.length() > 0) {
       result += ", ";  // Separate multiple values with a comma
     }
-    result += arrivalTime;
+    result += String(minutesUntilArrival) + " minutes";
 
     // Prepare for the next iteration
     startIndex = data.indexOf(searchKey, endIndex);
@@ -172,7 +196,6 @@ String extractExpectedArrivalTime(String data) {
 
   return result;
 }
-
 void getData(void)
 {
   //only attempt a new connection if the client is not currently connected
