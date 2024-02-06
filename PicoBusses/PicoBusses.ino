@@ -7,102 +7,27 @@
 #include <NTPClient.h>
 #include <EthernetUdp.h>
 #include <TimeLib.h>
-
-
-#define RESPONSE_BUFFER_SIZE 2048 // Adjust based on your expected response size
-#define ETHERNET_LARGE_BUFFERS
+#include "Globals.h"
 
 String APIkey = "da03f504-fc16-43e7-a736-319af37570be";
-String stopCodes[] = {"16633"};
-
-// This uses ArduinoUniqueID to pull the serial number off of the Flash chip.
-// Then, the least significant 6 bytes of the serial are used for the MAC.
-byte mac[] = {};
-String uniqueIDString = "";
-String MACAddress = "";
-
-const char server[] = "api.511.org";
-const char server_host[] = "api.511.org";
-
-EthernetUDP Udp;
-
-NTPClient timeClient(Udp);
-
-// Set the static IP address to use if the DHCP fails to assign
-IPAddress ip(192, 168, 0, 177);
-IPAddress myDns(8, 8, 8, 8);
-
-//this is the string that contains the decompressed XML server response
-String globalUncompressedDataStr = "";
-
-byte gzippedResponse[RESPONSE_BUFFER_SIZE];
-size_t responseIndex = 0;
-
-// Choose the analog pin to get semi-random data from for SSL
-const int rand_pin = 26;
-
-// Initialize the SSL client library
-// We input an EthernetClient, our trust anchors, and the analog pin
-EthernetClient base_client;
-SSLClient client(base_client, TAs, (size_t)TAs_NUM, rand_pin);
-
-// Variables to measure the speed
-unsigned long beginMicros, endMicros;
-unsigned long byteCount = 0;
- 
+String stopCodes[] = {"15678", "16633"};
 
 void decompressGzippedData(const uint8_t *gzippedData, size_t gzippedDataSize);
 uint32_t getUncompressedLength(const uint8_t* data, size_t dataSize);
-
-// Determine the size of the JSON document
-// Add extra space to accommodate the structure of the JSON
-//DynamicJsonDocument doc(8000);
+time_t iso8601ToEpoch(String datetime);
+String extractExpectedArrivalTime(String data, time_t currentTime);
+void getData(void);
+void generateMAC(void);
 
 void setup() {
 
-  // Read unique ID string, write to uniqueIDString
-  for (size_t i = 0; i < 8; i++) {
-    if (UniqueID8[i] < 0x10) {
-      uniqueIDString += "0";
-    }
-    uniqueIDString += String(UniqueID8[i], HEX);
-  }
+  generateMAC();
 
-  // Use the unique ID to set the MAC address
-  if (uniqueIDString.length() >= 12) {
-  // Loop through the last 6 bytes of the string
-    for (size_t i = 0; i < 6; i++) {
-      // Extract two characters (one byte in hex)
-      String hexByteStr = uniqueIDString.substring(uniqueIDString.length() - 12 + i * 2, uniqueIDString.length() - 10 + i * 2);
-      
-      // Convert the hex string to a byte
-      byte hexByte = (byte) strtol(hexByteStr.c_str(), NULL, 16);
-
-      // Assign this byte to the mac array
-      mac[i] = hexByte;
-    }
-  }
-
-  for (int i = 0; i < 6; i++) {
-    // Convert the byte to a hexadecimal string
-    if (mac[i] < 16) {
-        // Adding leading zero for bytes less than 16 (0x10)
-        MACAddress += "0";
-    }
-    MACAddress += String(mac[i], HEX);
-  }
-  MACAddress.toUpperCase();
-
-  Ethernet.init(17);  
+  Ethernet.init(17); // 17 is specific to the W5500-P
   // Open serial communications and wait for port to open:
   Serial.begin(115200);
-  
-  
-  while (!Serial) {
-    ; // wait for serial port to connect. Needed for native USB port only
-  }
-  
-  
+  delay(2000); //a non-blocking way for the Serial to connect.
+
   // start the Ethernet connection:
   Serial.println("Initialize Ethernet with DHCP:");
   Serial.println("Mac Address: " + MACAddress);
@@ -120,28 +45,41 @@ void setup() {
     }
     // try to configure using IP address instead of DHCP:
     Ethernet.begin(mac, ip, myDns);
-  } else {
-    Serial.print("DHCP assigned IP ");
-    Serial.println(Ethernet.localIP());
+  } 
+  else {
+        Serial.print("DHCP assigned IP ");
   }
+  Serial.println(Ethernet.localIP());
   // give the Ethernet shield a second to initialize:
   delay(1000);
 
+  //Open a UDP port and begin the Time client.
   Udp.begin(8888);
-
   timeClient.begin();
 }
   
 void loop() {
 
+  //We go through everything once, then repeat every minute
   timeClient.update();
   time_t currentTime = timeClient.getEpochTime();
-
   Serial.println(timeClient.getFormattedTime());
-
-  getData();
+  getData(stopCodes[0]);
   Serial.println(extractExpectedArrivalTime(globalUncompressedDataStr, currentTime));
-  delay(10000);
+
+  while(true)
+  {
+    if(now() >= oneMinute+65)
+    {
+      timeClient.update();
+      time_t currentTime = timeClient.getEpochTime();
+      oneMinute = now();
+
+      Serial.println(timeClient.getFormattedTime());
+      getData(stopCodes[0]);
+      Serial.println(extractExpectedArrivalTime(globalUncompressedDataStr, currentTime));
+    }
+  }
 }
 
 time_t iso8601ToEpoch(String datetime) {
@@ -196,7 +134,8 @@ String extractExpectedArrivalTime(String data, time_t currentTime) {
 
   return result;
 }
-void getData(void)
+
+void getData(String stopCode)
 {
   //only attempt a new connection if the client is not currently connected
   if (!client.connected())
@@ -210,7 +149,7 @@ void getData(void)
       // specify the server and port, 443 is the standard port for HTTPS
     if (client.connect(server, 443)) {
       // Make a HTTP request:
-      String getLine = ("GET /transit/StopMonitoring?api_key=" + APIkey + "&agency=SF&stopCode=" + stopCodes[0] + "&format=json HTTP/1.1");
+      String getLine = ("GET /transit/StopMonitoring?api_key=" + APIkey + "&agency=SF&stopCode=" + stopCode + "&format=json HTTP/1.1");
       client.println(getLine);
       client.println("User-Agent: RP2040 / W5500-EVB-Pico SSLClientOverEthernet");
       client.print("Host: ");
@@ -327,4 +266,40 @@ uint32_t getUncompressedLength(const uint8_t* data, size_t dataSize) {
         | (data[dataSize - 1] << 24);
 
     return uncompressedSize;
+}
+
+void generateMAC()
+{
+  // Read unique ID string, write to uniqueIDString
+  for (size_t i = 0; i < 8; i++) {
+    if (UniqueID8[i] < 0x10) {
+      uniqueIDString += "0";
+    }
+    uniqueIDString += String(UniqueID8[i], HEX);
+  }
+
+  // Use the unique ID to set the MAC address
+  if (uniqueIDString.length() >= 12) {
+  // Loop through the last 6 bytes of the string
+    for (size_t i = 0; i < 6; i++) {
+      // Extract two characters (one byte in hex)
+      String hexByteStr = uniqueIDString.substring(uniqueIDString.length() - 12 + i * 2, uniqueIDString.length() - 10 + i * 2);
+      
+      // Convert the hex string to a byte
+      byte hexByte = (byte) strtol(hexByteStr.c_str(), NULL, 16);
+
+      // Assign this byte to the mac array
+      mac[i] = hexByte;
+    }
+  }
+
+  for (int i = 0; i < 6; i++) {
+    // Convert the byte to a hexadecimal string
+    if (mac[i] < 16) {
+        // Adding leading zero for bytes less than 16 (0x10)
+        MACAddress += "0";
+    }
+    MACAddress += String(mac[i], HEX);
+  }
+  MACAddress.toUpperCase();
 }
