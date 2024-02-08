@@ -10,7 +10,7 @@
 #include "Globals.h"
 
 String APIkey = "da03f504-fc16-43e7-a736-319af37570be";
-String stopCodes[] = {"15678", "16633"};
+String stopCodes[] = {"16633"};
 
 void decompressGzippedData(const uint8_t *gzippedData, size_t gzippedDataSize);
 uint32_t getUncompressedLength(const uint8_t* data, size_t dataSize);
@@ -22,7 +22,6 @@ void generateMAC(void);
 void setup() {
 
   generateMAC();
-
   Ethernet.init(17); // 17 is specific to the W5500-P
   // Open serial communications and wait for port to open:
   Serial.begin(115200);
@@ -78,6 +77,8 @@ void loop() {
       Serial.println(timeClient.getFormattedTime());
       getData(stopCodes[0]);
       Serial.println(extractExpectedArrivalTime(globalUncompressedDataStr, currentTime));
+      Serial.println("");
+      Serial.println("");
     }
   }
 }
@@ -137,81 +138,84 @@ String extractExpectedArrivalTime(String data, time_t currentTime) {
 
 void getData(String stopCode)
 {
-  //only attempt a new connection if the client is not currently connected
-  if (!client.connected())
-  {
-    Serial.print("connecting to ");
-    Serial.print(server);
-    Serial.println("...");
-
-    auto start = millis();
-
-      // specify the server and port, 443 is the standard port for HTTPS
-    if (client.connect(server, 443)) {
-      // Make a HTTP request:
-      String getLine = ("GET /transit/StopMonitoring?api_key=" + APIkey + "&agency=SF&stopCode=" + stopCode + "&format=json HTTP/1.1");
-      client.println(getLine);
-      client.println("User-Agent: RP2040 / W5500-EVB-Pico SSLClientOverEthernet");
-      client.print("Host: ");
-      client.println(server_host);
-      client.println("Connection: close");
-      client.println();
-    } else {
-      // if you didn't get a connection to the server:
-      Serial.println("connection failed");
-      return; //exit the loop early, there's nothign to do
-    }
-  }
-
-  // Assuming 'client' is already connected and has made a request.
+  const int maxRetries = 3; // Maximum number of connection retries
+  int retryCount = 0;
+  bool connected = false;
   String line;
   bool isGzip = false;
-  bool headersFinished = false; // Flag to indicate when headers are completely read.
 
-  // Read and discard headers
-  while (client.available()) {
-    line = client.readStringUntil('\n');
-    Serial.println(line);
-    // Check for gzip encoding in headers
-    if (line.startsWith("Content-Encoding: gzip")) {
-      isGzip = true;
-    }
-    // Check if we've reached the end of the headers
-    if (line == "\r") {
-      headersFinished = true;
-      break; // Exit the loop as headers are done.
+  // Attempt to connect with retries
+  while (!connected && retryCount < maxRetries) {
+    if (client.connect(server, 443)) {
+      connected = true;
+    } else {
+      Serial.println("Connection attempt failed, retrying...");
+      retryCount++;
+      delay(2000); // Wait 2 seconds before retrying
     }
   }
-  
-  //If we have a gzip response, we're probably getting data
-  if (isGzip) {
-    // New loop to read data until connection is closed
-    while (client.connected() || client.available()) {
-      while (client.available()) {
-        byte buffer[2048]; // Adjust size as needed
-        int bytesRead = client.read(buffer, sizeof(buffer));
-        if (bytesRead > 0) {
-          // Ensure we do not overflow the gzippedResponse buffer
-          size_t toCopy = min(bytesRead, RESPONSE_BUFFER_SIZE - responseIndex);
-          memcpy(gzippedResponse + responseIndex, buffer, toCopy);
-          responseIndex += toCopy;
-          byteCount += bytesRead;
-        }
+
+  if (!connected) {
+    Serial.println("Failed to connect after retries, exiting function.");
+    return; // Exit if still not connected after retries
+  }
+
+  // Send the HTTP GET request
+  client.println("GET /transit/StopMonitoring?api_key=" + APIkey + "&agency=SF&stopCode=" + stopCode + "&format=json HTTP/1.1");
+  client.println("User-Agent: " + User_Agent);
+  client.println("Host: " + String(server_host));
+  client.println("Connection: close");
+  client.println(); // End of headers
+
+  // Wait for response or timeout
+  unsigned long startTime = millis();
+  while (!client.available()) {
+    if (millis() - startTime > 5000) { // 5-second timeout
+      Serial.println("Timeout waiting for server response.");
+      client.stop();
+      return;
+    }
+  }
+
+  // Read the HTTP status line
+  String statusLine = client.readStringUntil('\n');
+  Serial.println(statusLine); // Log the status line for debugging
+
+  // Read and discard headers, looking for the end of the headers section
+  bool headersFinished = false;
+  while (client.available() && !headersFinished) {
+    String headerLine = client.readStringUntil('\n');
+    if (headerLine == "\r") {
+      headersFinished = true;
+    }
+  }
+
+  // Read the body
+  while (client.connected() || client.available()) {
+    while (client.available()) {
+      byte buffer[2048]; // Adjust buffer size as necessary
+      size_t bytesRead = client.read(buffer, sizeof(buffer));
+      if (bytesRead > 0) {
+        // Ensure we do not overflow the gzippedResponse buffer
+        size_t toCopy = min(bytesRead, sizeof(gzippedResponse) - responseIndex);
+        memcpy(gzippedResponse + responseIndex, buffer, toCopy);
+        responseIndex += toCopy;
       }
     }
-  }
-  
-  // if the server's disconnected, stop the client:
-  if (!client.connected()) {
-    if (responseIndex > 0) {
-      decompressGzippedData(gzippedResponse, responseIndex);
-      responseIndex = 0;
+    if (!client.connected()) {
+      break; // Exit the loop if the client has disconnected
     }
-    Serial.println("disconnecting.");
-    client.stop();
   }
 
-  //delay(1000);
+  // Process the response if any data was received
+  if (responseIndex > 0) {
+    decompressGzippedData(gzippedResponse, responseIndex);
+    responseIndex = 0; // Reset for next use
+  }
+
+  client.stop(); // Ensure the client is stopped
+  Serial.println("Disconnected from server.");
+
 }
 
 void decompressGzippedData(const uint8_t *gzippedData, size_t gzippedDataSize) {

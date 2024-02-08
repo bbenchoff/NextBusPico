@@ -9,6 +9,7 @@
 byte mac[] = {};
 String uniqueIDString = "";
 String MACAddress = "";
+String User_Agent = "RP2040 / W5500-EVB-Pico SSLClientOverEthernet";
 
 // Set the static IP address to use if the DHCP fails to assign
 IPAddress ip(192, 168, 0, 177);
