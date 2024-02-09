@@ -7,10 +7,12 @@
 #include <NTPClient.h>
 #include <EthernetUdp.h>
 #include <TimeLib.h>
+#include <ArduinoJson.h>
 #include "Globals.h"
 
 String APIkey = "da03f504-fc16-43e7-a736-319af37570be";
-String stopCodes[] = {"16633"};
+String stopCodes[] = {"15684"};
+
 
 void decompressGzippedData(const uint8_t *gzippedData, size_t gzippedDataSize);
 uint32_t getUncompressedLength(const uint8_t* data, size_t dataSize);
@@ -59,12 +61,32 @@ void setup() {
   
 void loop() {
 
+  String testJson = "{\"simple\":\"test\"}";
+DynamicJsonDocument doc(10000);
+auto error = deserializeJson(doc, testJson);
+if (error) {
+    Serial.print(F("deserializeJson() failed with hardcoded test: "));
+    Serial.println(error.f_str());
+} else {
+    Serial.println(F("Hardcoded test succeeded."));
+}
+
   //We go through everything once, then repeat every minute
   timeClient.update();
   time_t currentTime = timeClient.getEpochTime();
   Serial.println(timeClient.getFormattedTime());
   getData(stopCodes[0]);
-  Serial.println(extractExpectedArrivalTime(globalUncompressedDataStr, currentTime));
+
+  Serial.print("JSON string length: ");
+  Serial.println(globalUncompressedDataStr.length());
+
+  parseAndFormatBusArrivals(globalUncompressedDataStr);
+
+
+  Serial.println("");
+  Serial.println("");
+
+  //Serial.println(extractExpectedArrivalTime(globalUncompressedDataStr, currentTime));
 
   while(true)
   {
@@ -76,7 +98,13 @@ void loop() {
 
       Serial.println(timeClient.getFormattedTime());
       getData(stopCodes[0]);
-      Serial.println(extractExpectedArrivalTime(globalUncompressedDataStr, currentTime));
+
+
+
+
+      parseAndFormatBusArrivals(globalUncompressedDataStr);
+
+      //Serial.println(extractExpectedArrivalTime(globalUncompressedDataStr, currentTime));
       Serial.println("");
       Serial.println("");
     }
@@ -214,7 +242,7 @@ void getData(String stopCode)
   }
 
   client.stop(); // Ensure the client is stopped
-  Serial.println("Disconnected from server.");
+  //Serial.println("Disconnected from server.");
 
 }
 
@@ -251,8 +279,12 @@ void decompressGzippedData(const uint8_t *gzippedData, size_t gzippedDataSize) {
         for (size_t i = 0; i < outBytes; ++i) {
             globalUncompressedDataStr += (char)uncompressedData[i];
         }
+
+        globalUncompressedDataStr.trim(); // Removes whitespace from the beginning and end
+
+        Serial.println(globalUncompressedDataStr);
         
-        Serial.write(uncompressedData, outBytes);
+        //Serial.write(uncompressedData, outBytes);
         // print the String or its size
         //Serial.println("\nUncompressed Data Size: " + String(globalUncompressedDataStr.length()));
     }
@@ -307,3 +339,41 @@ void generateMAC()
   }
   MACAddress.toUpperCase();
 }
+
+
+
+
+void parseAndFormatBusArrivals(const String& jsonData) {
+  const size_t capacity = JSON_ARRAY_SIZE(50) + 10*JSON_OBJECT_SIZE(20) + 2*JSON_OBJECT_SIZE(3) + JSON_OBJECT_SIZE(12) + 6000;
+  DynamicJsonDocument doc(capacity);
+
+  
+  
+  DeserializationError error = deserializeJson(doc, jsonData);
+
+  if (error) {
+    Serial.print(F("deserializeJson() failed: "));
+    Serial.println(error.f_str());
+    return;
+  }
+
+  JsonArray arr = doc["ServiceDelivery"]["StopMonitoringDelivery"]["MonitoredStopVisit"];
+
+  for (JsonObject obj : arr) {
+    String lineRef = obj["MonitoredVehicleJourney"]["LineRef"].as<String>();
+    String expectedArrivalTimeStr = obj["MonitoredVehicleJourney"]["MonitoredCall"]["ExpectedArrivalTime"].as<String>();
+    
+    // Convert ISO8601 to epoch, then to local time if necessary
+    time_t expectedArrivalEpoch = iso8601ToEpoch(expectedArrivalTimeStr);
+    time_t currentTime = now(); // This function needs to return the current time as epoch
+    long minutesUntilArrival = (expectedArrivalEpoch - currentTime) / 60;
+
+    // Print the line reference and expected arrival time
+    Serial.print(lineRef);
+    Serial.print(" in ");
+    Serial.print(minutesUntilArrival);
+    Serial.println(" minutes");
+  }
+}
+
+

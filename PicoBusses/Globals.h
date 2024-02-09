@@ -4,6 +4,7 @@
 #define RESPONSE_BUFFER_SIZE 2048 // Adjust based on your expected response size
 #define ETHERNET_LARGE_BUFFERS
 
+
 // This uses ArduinoUniqueID to pull the serial number off of the Flash chip.
 // Then, the least significant 6 bytes of the serial are used for the MAC.
 byte mac[] = {};
