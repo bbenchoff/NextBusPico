@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import pytz
 
 # Your API URL
-url = "https://api.511.org/transit/StopMonitoring?api_key=da03f504-fc16-43e7-a736-319af37570be&agency=SF&stopCode=13565"
+url = "https://api.511.org/transit/StopMonitoring?api_key=da03f504-fc16-43e7-a736-319af37570be&agency=SF&stopCode=19777"
 
 # Send a GET request to the URL
 response = requests.get(url, headers={'Accept': 'application/xml'})

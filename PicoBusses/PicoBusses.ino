@@ -1,3 +1,26 @@
+/* This is a list of stop codes to gather. These are 
+// Unique to _you_, and this should be the only thing
+// you change. For example, if you want this device to 
+// report on the stops at 9th Ave & Irving St (#17999),
+// Lincoln Way & 9th Ave on bus 7 (#15301), and 9th &
+// Lincoln Way for the 44 (#13220), this line would be:
+//
+//  String stopCodes[] = {"19777", "15301", "13220"};
+//
+// You cna find the stop codes for your bus stop by
+// looking at goole maps and clicking on the bus stop
+// you want to access with this device. Or look at your
+// transit agency's website or something.
+*/
+String stopCodes[] = {"15696", "15565", "13220", "15678"};
+//String stopCodes[] = {"15678"};
+
+// This is your API key. You need a unique one
+// Sign up at https://511.org/open-data/token
+String APIkey = "da03f504-fc16-43e7-a736-319af37570be";
+
+// You should not have to adjust anything below this line.
+
 #include <SPI.h>
 #include <EthernetLarge.h>
 #include <SSLClient.h>
@@ -5,14 +28,12 @@
 #include "miniz.h"
 #include <ArduinoUniqueID.h>
 #include <NTPClient.h>
-#include <EthernetUdp.h>
 #include <TimeLib.h>
 #include <ArduinoJson.h>
 #include "Globals.h"
-
-String APIkey = "da03f504-fc16-43e7-a736-319af37570be";
-String stopCodes[] = {"15684"};
-
+#include <map>
+#include <vector>
+#include <string>
 
 void decompressGzippedData(const uint8_t *gzippedData, size_t gzippedDataSize);
 uint32_t getUncompressedLength(const uint8_t* data, size_t dataSize);
@@ -20,11 +41,16 @@ time_t iso8601ToEpoch(String datetime);
 String extractExpectedArrivalTime(String data, time_t currentTime);
 void getData(void);
 void generateMAC(void);
+String CurrentTimeToString(time_t time);
+void displayArrivals(void);
+void removeOldArrivals(void);
+
+
 
 void setup() {
 
   generateMAC();
-  Ethernet.init(17); // 17 is specific to the W5500-P
+  Ethernet.init(17); // 17 is specific to the W5500-EVB
   // Open serial communications and wait for port to open:
   Serial.begin(115200);
   delay(2000); //a non-blocking way for the Serial to connect.
@@ -54,60 +80,41 @@ void setup() {
   // give the Ethernet shield a second to initialize:
   delay(1000);
 
-  //Open a UDP port and begin the Time client.
-  Udp.begin(8888);
-  timeClient.begin();
+  for (int i = 0; i < sizeof(stopCodes)/sizeof(stopCodes[0]); i++) {
+    stopCodeDataArray[i].stopCode = stopCodes[i];
+    stopCodeDataArray[i].arrivalCount = 0; // Initialize the count of arrivals to 0
+}
+
+  currentTime = now();
 }
   
 void loop() {
 
-  String testJson = "{\"simple\":\"test\"}";
-DynamicJsonDocument doc(10000);
-auto error = deserializeJson(doc, testJson);
-if (error) {
-    Serial.print(F("deserializeJson() failed with hardcoded test: "));
-    Serial.println(error.f_str());
-} else {
-    Serial.println(F("Hardcoded test succeeded."));
-}
+  unsigned long currentMillis;
+  
+  currentMillis = millis(); // capture the current time
 
-  //We go through everything once, then repeat every minute
-  timeClient.update();
-  time_t currentTime = timeClient.getEpochTime();
-  Serial.println(timeClient.getFormattedTime());
-  getData(stopCodes[0]);
+  if (currentMillis - previousMillis >= interval) { // check if 65 seconds have passed
+    previousMillis = currentMillis; // save the last execution time
 
-  Serial.print("JSON string length: ");
-  Serial.println(globalUncompressedDataStr.length());
+    // Place your periodic action here
+    
+    getData(stopCodeDataArray[currentStopCodeIndex].stopCode);
+    Serial.println(CurrentTimeToString(currentTime));
+    removeOldArrivals();
 
-  parseAndFormatBusArrivals(globalUncompressedDataStr);
-
-
-  Serial.println("");
-  Serial.println("");
-
-  //Serial.println(extractExpectedArrivalTime(globalUncompressedDataStr, currentTime));
-
-  while(true)
-  {
-    if(now() >= oneMinute+65)
-    {
-      timeClient.update();
-      time_t currentTime = timeClient.getEpochTime();
-      oneMinute = now();
-
-      Serial.println(timeClient.getFormattedTime());
-      getData(stopCodes[0]);
-
-
-
-
-      parseAndFormatBusArrivals(globalUncompressedDataStr);
-
-      //Serial.println(extractExpectedArrivalTime(globalUncompressedDataStr, currentTime));
-      Serial.println("");
-      Serial.println("");
+    if (globalUncompressedDataStr.length() > 0) {
+        Serial.print("JSON string length: ");
+        Serial.println(globalUncompressedDataStr.length());
+        parseAndFormatBusArrivals(globalUncompressedDataStr);
+        displayArrivals();
+        currentStopCodeIndex = (currentStopCodeIndex + 1) % (sizeof(stopCodes)/sizeof(stopCodes[0]));
+    } else {
+        Serial.println("No data or failed to fetch data");
     }
+
+    Serial.println("");
+    Serial.println("");
   }
 }
 
@@ -127,6 +134,16 @@ time_t iso8601ToEpoch(String datetime) {
     return makeTime(tm); // Converts to time_t
 }
 
+String CurrentTimeToString(time_t time) {
+    char timeString[20]; // Buffer to hold the formatted time string, adjust size if needed
+
+    // Format the time into the timeString buffer
+    snprintf(timeString, sizeof(timeString), "%04d-%02d-%02d %02d:%02d:%02d", 
+             year(time), month(time), day(time), hour(time), minute(time));
+
+    // Return the formatted time string
+    return String(timeString);
+}
 
 
 String extractExpectedArrivalTime(String data, time_t currentTime) {
@@ -194,6 +211,7 @@ void getData(String stopCode)
   client.println("Host: " + String(server_host));
   client.println("Connection: close");
   client.println(); // End of headers
+
 
   // Wait for response or timeout
   unsigned long startTime = millis();
@@ -281,12 +299,7 @@ void decompressGzippedData(const uint8_t *gzippedData, size_t gzippedDataSize) {
         }
 
         globalUncompressedDataStr.trim(); // Removes whitespace from the beginning and end
-
         Serial.println(globalUncompressedDataStr);
-        
-        //Serial.write(uncompressedData, outBytes);
-        // print the String or its size
-        //Serial.println("\nUncompressed Data Size: " + String(globalUncompressedDataStr.length()));
     }
 
     free(uncompressedData);
@@ -341,15 +354,18 @@ void generateMAC()
 }
 
 
-
-
 void parseAndFormatBusArrivals(const String& jsonData) {
-  const size_t capacity = JSON_ARRAY_SIZE(50) + 10*JSON_OBJECT_SIZE(20) + 2*JSON_OBJECT_SIZE(3) + JSON_OBJECT_SIZE(12) + 6000;
-  DynamicJsonDocument doc(capacity);
 
-  
-  
-  DeserializationError error = deserializeJson(doc, jsonData);
+  // Clear existing data for the current stop code
+  stopCodeDataArray[currentStopCodeIndex].arrivalCount = 0;
+
+  // The first characters I'm getting are 0xEF 0xBB 0xBF, a byte order mark
+  //I need to delete those before deserializing.
+  String cleanJsonData = jsonData.substring(3); 
+
+  DynamicJsonDocument doc(40000);
+
+  DeserializationError error = deserializeJson(doc, cleanJsonData);
 
   if (error) {
     Serial.print(F("deserializeJson() failed: "));
@@ -357,23 +373,110 @@ void parseAndFormatBusArrivals(const String& jsonData) {
     return;
   }
 
-  JsonArray arr = doc["ServiceDelivery"]["StopMonitoringDelivery"]["MonitoredStopVisit"];
+  // Extract the ResponseTimestamp from the JSON data
+  const char* responseTimestamp = doc["ServiceDelivery"]["ResponseTimestamp"];
+  if (responseTimestamp) {
+      // Convert ISO8601 to epoch
+      time_t serverTime = iso8601ToEpoch(String(responseTimestamp));
 
-  for (JsonObject obj : arr) {
-    String lineRef = obj["MonitoredVehicleJourney"]["LineRef"].as<String>();
-    String expectedArrivalTimeStr = obj["MonitoredVehicleJourney"]["MonitoredCall"]["ExpectedArrivalTime"].as<String>();
-    
-    // Convert ISO8601 to epoch, then to local time if necessary
-    time_t expectedArrivalEpoch = iso8601ToEpoch(expectedArrivalTimeStr);
-    time_t currentTime = now(); // This function needs to return the current time as epoch
-    long minutesUntilArrival = (expectedArrivalEpoch - currentTime) / 60;
+      Serial.print(F("Server Time (epoch): "));
+      Serial.println(serverTime);
 
-    // Print the line reference and expected arrival time
-    Serial.print(lineRef);
-    Serial.print(" in ");
-    Serial.print(minutesUntilArrival);
-    Serial.println(" minutes");
+      // Use setTime which is part of the TimeLib.h if you want to set the system time
+      // Note: This sets the time for the Time library, which affects functions like now()
+      setTime(serverTime);
+      currentTime = serverTime;
   }
+
+  JsonArray arr = doc["ServiceDelivery"]["StopMonitoringDelivery"]["MonitoredStopVisit"];
+    int count = 0;
+    for(JsonObject obj : arr) {
+        if (count >= MAX_ARRIVALS) break; // Prevent overflow of arrivals array
+
+        String lineRef = obj["MonitoredVehicleJourney"]["LineRef"].as<String>();
+        String expectedArrivalTimeStr = obj["MonitoredVehicleJourney"]["MonitoredCall"]["ExpectedArrivalTime"].as<String>();
+        String destinationDisplay = obj["MonitoredVehicleJourney"]["MonitoredCall"]["DestinationDisplay"].as<String>();
+        String stopPointName = obj["MonitoredVehicleJourney"]["MonitoredCall"]["StopPointName"].as<String>();
+
+        // Store the arrival data
+        BusArrival& arrival = stopCodeDataArray[currentStopCodeIndex].arrivals[count];
+        arrival.lineRef = lineRef;
+        arrival.expectedArrivalTimeStr = expectedArrivalTimeStr;
+        arrival.destinationDisplay = destinationDisplay;
+        arrival.stopPointName = stopPointName;
+
+        count++;
+    }
+    // Update the count of arrivals for the current stop code
+    stopCodeDataArray[currentStopCodeIndex].arrivalCount = count;
 }
 
+void removeOldArrivals() {
+    int i = 0;
+    while (i < arrivalCount) {
+        time_t expectedArrivalEpoch = iso8601ToEpoch(arrivals[i].expectedArrivalTimeStr);
+        if (expectedArrivalEpoch <= now()) {
+            // Shift all subsequent arrivals one position to the left
+            for (int j = i; j < arrivalCount - 1; j++) {
+                arrivals[j] = arrivals[j + 1];
+            }
+            arrivalCount--; // Decrease the count of arrivals
+        } else {
+            i++; // Only increase i if we didn't remove an arrival
+        }
+    }
+}
+
+void displayArrivals() {
+    Serial.println();
+    currentTime = now(); // Ensure we have the current time updated
+
+    for (int stopCodeIndex = 0; stopCodeIndex < sizeof(stopCodes) / sizeof(stopCodes[0]); stopCodeIndex++) {
+        //Serial.print("Stop Code: ");
+        //Serial.println(stopCodeDataArray[stopCodeIndex].stopCode);
+
+        // Assuming a manageable number of unique lineRefs
+        String lineRefs[100];
+        String destinations[100];
+        String stopPoints[100];
+        String minutesLists[100];
+        int uniqueLines = 0;
+
+        for (int arrivalIndex = 0; arrivalIndex < stopCodeDataArray[stopCodeIndex].arrivalCount; arrivalIndex++) {
+            BusArrival& arrival = stopCodeDataArray[stopCodeIndex].arrivals[arrivalIndex];
+            time_t expectedArrivalEpoch = iso8601ToEpoch(arrival.expectedArrivalTimeStr);
+            long minutesUntilArrival = (expectedArrivalEpoch - currentTime) / 60;
+
+            if (expectedArrivalEpoch <= currentTime) continue; // Skip past or invalid arrivals
+
+            // Find if this lineRef is already noted, else add it
+            int lineIndex = -1;
+            for (int i = 0; i < uniqueLines; i++) {
+                if (lineRefs[i] == arrival.lineRef && destinations[i] == arrival.destinationDisplay && stopPoints[i] == arrival.stopPointName) {
+                    lineIndex = i;
+                    break;
+                }
+            }
+
+            if (lineIndex == -1) { // New lineRef
+                lineIndex = uniqueLines++;
+                lineRefs[lineIndex] = arrival.lineRef;
+                destinations[lineIndex] = arrival.destinationDisplay;
+                stopPoints[lineIndex] = arrival.stopPointName;
+                minutesLists[lineIndex] = String(minutesUntilArrival);
+            } else { // Existing lineRef, append minutes
+                minutesLists[lineIndex] += ", " + String(minutesUntilArrival);
+            }
+        }
+
+        // Now print out the aggregated information
+        for (int i = 0; i < uniqueLines; i++) {
+            Serial.print(lineRefs[i] + " to ");
+            Serial.print(destinations[i] + " in ");
+            Serial.print(minutesLists[i] + " minutes at ");
+            Serial.println(stopPoints[i]);
+        }
+    }
+    Serial.println(); // Extra line for readability
+}
 
