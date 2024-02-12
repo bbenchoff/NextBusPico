@@ -48,7 +48,6 @@ void removeOldArrivals(void);
 
 
 void setup() {
-
   generateMAC();
   Ethernet.init(17); // 17 is specific to the W5500-EVB
   // Open serial communications and wait for port to open:
