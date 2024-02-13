@@ -21,38 +21,39 @@ String APIkey = "da03f504-fc16-43e7-a736-319af37570be";
 
 // You should not have to adjust anything below this line.
 
-#include <SPI.h>
-#include <EthernetLarge.h>
-#include <SSLClient.h>
-#include "trust_anchors.h"
-#include "miniz.h"
-#include <ArduinoUniqueID.h>
-#include <NTPClient.h>
-#include <TimeLib.h>
-#include <ArduinoJson.h>
 #include "Globals.h"
-#include <map>
-#include <vector>
-#include <string>
+#include "miniz.h"
+#include "trust_anchors.h"
 
+#include <ArduinoJson.h>
+#include <ArduinoUniqueID.h>
+#include <EthernetLarge.h>
+#include <NTPClient.h>
+#include <SPI.h>
+#include <SSLClient.h>
+#include <TimeLib.h>
+
+void generateMAC(void);
+
+String CurrentTimeToString(time_t time);
+time_t iso8601ToEpoch(String datetime);
+
+void getData(void);
 void decompressGzippedData(const uint8_t *gzippedData, size_t gzippedDataSize);
 uint32_t getUncompressedLength(const uint8_t* data, size_t dataSize);
-time_t iso8601ToEpoch(String datetime);
 String extractExpectedArrivalTime(String data, time_t currentTime);
-void getData(void);
-void generateMAC(void);
-String CurrentTimeToString(time_t time);
-void displayArrivals(void);
+void parseAndFormatBusArrivals(const String& jsonData);
 void removeOldArrivals(void);
-
+void displayArrivals(void);
 
 
 void setup() {
+
   generateMAC();
   Ethernet.init(17); // 17 is specific to the W5500-EVB
   // Open serial communications and wait for port to open:
   Serial.begin(115200);
-  delay(2000); //a non-blocking way for the Serial to connect.
+  delay(2000); //a non-blocking way for the Serial to connect?
 
   // start the Ethernet connection:
   Serial.println("Initialize Ethernet with DHCP:");
@@ -76,27 +77,25 @@ void setup() {
         Serial.print("DHCP assigned IP ");
   }
   Serial.println(Ethernet.localIP());
-  // give the Ethernet shield a second to initialize:
-  delay(1000);
+  
+  delay(1000); // give the Ethernet shield a second to initialize:
 
   for (int i = 0; i < sizeof(stopCodes)/sizeof(stopCodes[0]); i++) {
     stopCodeDataArray[i].stopCode = stopCodes[i];
     stopCodeDataArray[i].arrivalCount = 0; // Initialize the count of arrivals to 0
-}
+  }
 
   currentTime = now();
+
 }
   
 void loop() {
 
   unsigned long currentMillis;
-  
   currentMillis = millis(); // capture the current time
 
   if (currentMillis - previousMillis >= interval) { // check if 65 seconds have passed
-    previousMillis = currentMillis; // save the last execution time
-
-    // Place your periodic action here
+    previousMillis = currentMillis;
     
     getData(stopCodeDataArray[currentStopCodeIndex].stopCode);
     Serial.println(CurrentTimeToString(currentTime));
@@ -111,10 +110,53 @@ void loop() {
     } else {
         Serial.println("No data or failed to fetch data");
     }
-
     Serial.println("");
     Serial.println("");
   }
+}
+
+void generateMAC(){
+  // Read unique ID string, write to uniqueIDString
+  for (size_t i = 0; i < 8; i++) {
+    if (UniqueID8[i] < 0x10) {
+      uniqueIDString += "0";
+    }
+    uniqueIDString += String(UniqueID8[i], HEX);
+  }
+
+  // Use the unique ID to set the MAC address
+  if (uniqueIDString.length() >= 12) {
+  // Loop through the last 6 bytes of the string
+    for (size_t i = 0; i < 6; i++) {
+      // Extract two characters (one byte in hex)
+      String hexByteStr = uniqueIDString.substring(uniqueIDString.length() - 12 + i * 2, uniqueIDString.length() - 10 + i * 2);
+      
+      // Convert the hex string to a byte
+      byte hexByte = (byte) strtol(hexByteStr.c_str(), NULL, 16);
+
+      // Assign this byte to the mac array
+      mac[i] = hexByte;
+    }
+  }
+
+  for (int i = 0; i < 6; i++) {
+    // Convert the byte to a hexadecimal string
+    if (mac[i] < 16) {
+        // Adding leading zero for bytes less than 16 (0x10)
+        MACAddress += "0";
+    }
+    MACAddress += String(mac[i], HEX);
+  }
+  MACAddress.toUpperCase();
+}
+
+String CurrentTimeToString(time_t time) {
+    char timeString[20];
+
+    snprintf(timeString, sizeof(timeString), "%04d-%02d-%02d %02d:%02d:%02d", 
+             year(time), month(time), day(time), hour(time), minute(time));
+
+    return String(timeString);
 }
 
 time_t iso8601ToEpoch(String datetime) {
@@ -130,21 +172,141 @@ time_t iso8601ToEpoch(String datetime) {
     tm.Minute = Minute;
     tm.Second = Second;
 
-    return makeTime(tm); // Converts to time_t
+    return makeTime(tm);
 }
 
-String CurrentTimeToString(time_t time) {
-    char timeString[20]; // Buffer to hold the formatted time string, adjust size if needed
+void getData(String stopCode){
+  const int maxRetries = 3; // Maximum number of connection retries
+  int retryCount = 0;
+  bool connected = false;
+  bool isGzip = false;
+  String line;
 
-    // Format the time into the timeString buffer
-    snprintf(timeString, sizeof(timeString), "%04d-%02d-%02d %02d:%02d:%02d", 
-             year(time), month(time), day(time), hour(time), minute(time));
+  // Attempt to connect with retries
+  while (!connected && retryCount < maxRetries) {
+    if (client.connect(server, 443)) {
+      connected = true;
+    } else {
+      Serial.println("Connection attempt failed, retrying...");
+      retryCount++;
+      delay(2000); // Wait 2 seconds before retrying
+    }
+  }
 
-    // Return the formatted time string
-    return String(timeString);
+  if (!connected) {
+    Serial.println("Failed to connect after retries, exiting function.");
+    return; // Exit if still not connected after retries
+  }
+
+  // Send the HTTP GET request
+  client.println("GET /transit/StopMonitoring?api_key=" + APIkey + "&agency=SF&stopCode=" + stopCode + "&format=json HTTP/1.1");
+  client.println("User-Agent: " + User_Agent);
+  client.println("Host: " + String(server_host));
+  client.println("Connection: close");
+  client.println(); // End of headers
+
+  // Wait for response or timeout
+  unsigned long startTime = millis();
+  while (!client.available()) {
+    if (millis() - startTime > 5000) { // 5-second timeout
+      Serial.println("Timeout waiting for server response.");
+      client.stop();
+      return;
+    }
+  }
+
+  // Read the HTTP status line
+  String statusLine = client.readStringUntil('\n');
+  Serial.println(statusLine); // Log the status line for debugging
+
+  // Read and discard headers, looking for the end of the headers section
+  bool headersFinished = false;
+  while (client.available() && !headersFinished) {
+    String headerLine = client.readStringUntil('\n');
+    if (headerLine == "\r") {
+      headersFinished = true;
+    }
+  }
+
+  // Read the body
+  while (client.connected() || client.available()) {
+    while (client.available()) {
+      byte buffer[2048]; // Adjust buffer size as necessary
+      size_t bytesRead = client.read(buffer, sizeof(buffer));
+      if (bytesRead > 0) {
+        size_t toCopy = min(bytesRead, sizeof(gzippedResponse) - responseIndex);
+        memcpy(gzippedResponse + responseIndex, buffer, toCopy);
+        responseIndex += toCopy;
+      }
+    }
+    if (!client.connected()) {
+      break; // Exit the loop if the client has disconnected
+    }
+  }
+
+  // Process the response if any data was received
+  if (responseIndex > 0) {
+    decompressGzippedData(gzippedResponse, responseIndex);
+    responseIndex = 0; // Reset for next use
+  }
+
+  client.stop();
+
 }
 
+void decompressGzippedData(const uint8_t *gzippedData, size_t gzippedDataSize) {
+  Serial.print("Attempting to decompress data of size: ");
+  Serial.println(gzippedDataSize);
 
+  // Use the getUncompressedLength function to determine the expected uncompressed size.
+  uint32_t expectedUncompressedSize = getUncompressedLength(gzippedData, gzippedDataSize);
+  uint8_t *uncompressedData = (uint8_t *)malloc(expectedUncompressedSize);
+
+  if (uncompressedData == NULL) {
+      Serial.println("Failed to allocate memory for decompression.");
+      return;
+  }
+
+  // This subtracts 8 bytes from the header, because that's how this works
+  const size_t gzipHeaderSize = 10;
+  const uint8_t *deflateData = gzippedData + gzipHeaderSize;
+  size_t deflateDataSize = gzippedDataSize - gzipHeaderSize - 8; // Subtract 8 bytes for the gzip footer
+
+  mz_ulong outBytes = expectedUncompressedSize;
+  int status = tinfl_decompress_mem_to_mem(uncompressedData, outBytes, deflateData, deflateDataSize, 0);
+
+  if (status == TINFL_DECOMPRESS_MEM_TO_MEM_FAILED) {
+      Serial.println("Decompression failed.");
+  } 
+  else {
+    Serial.println("Decompression successful.");
+    globalUncompressedDataStr = "";
+
+    // Convert uncompressed data to String
+    for (size_t i = 0; i < outBytes; ++i) {
+      globalUncompressedDataStr += (char)uncompressedData[i];
+    }
+
+    globalUncompressedDataStr.trim(); // Removes whitespace from the beginning and end
+    Serial.println(globalUncompressedDataStr);
+  }
+  free(uncompressedData);
+}
+
+uint32_t getUncompressedLength(const uint8_t* data, size_t dataSize) {
+    if (dataSize < 4) return 0; // this isn't right, bail.
+
+    // The uncompressed size is stored in the last 4 bytes
+    // of the gzip stream in little-endian format
+    uint32_t uncompressedSize = data[dataSize - 4]
+        | (data[dataSize - 3] << 8)
+        | (data[dataSize - 2] << 16)
+        | (data[dataSize - 1] << 24);
+
+    return uncompressedSize;
+}
+
+//This might be a vestigial function, I have no idea delete this maybe?
 String extractExpectedArrivalTime(String data, time_t currentTime) {
   String searchKey = "\"ExpectedArrivalTime\":\"";
   int startIndex = 0;
@@ -180,181 +342,7 @@ String extractExpectedArrivalTime(String data, time_t currentTime) {
   return result;
 }
 
-void getData(String stopCode)
-{
-  const int maxRetries = 3; // Maximum number of connection retries
-  int retryCount = 0;
-  bool connected = false;
-  String line;
-  bool isGzip = false;
-
-  // Attempt to connect with retries
-  while (!connected && retryCount < maxRetries) {
-    if (client.connect(server, 443)) {
-      connected = true;
-    } else {
-      Serial.println("Connection attempt failed, retrying...");
-      retryCount++;
-      delay(2000); // Wait 2 seconds before retrying
-    }
-  }
-
-  if (!connected) {
-    Serial.println("Failed to connect after retries, exiting function.");
-    return; // Exit if still not connected after retries
-  }
-
-  // Send the HTTP GET request
-  client.println("GET /transit/StopMonitoring?api_key=" + APIkey + "&agency=SF&stopCode=" + stopCode + "&format=json HTTP/1.1");
-  client.println("User-Agent: " + User_Agent);
-  client.println("Host: " + String(server_host));
-  client.println("Connection: close");
-  client.println(); // End of headers
-
-
-  // Wait for response or timeout
-  unsigned long startTime = millis();
-  while (!client.available()) {
-    if (millis() - startTime > 5000) { // 5-second timeout
-      Serial.println("Timeout waiting for server response.");
-      client.stop();
-      return;
-    }
-  }
-
-  // Read the HTTP status line
-  String statusLine = client.readStringUntil('\n');
-  Serial.println(statusLine); // Log the status line for debugging
-
-  // Read and discard headers, looking for the end of the headers section
-  bool headersFinished = false;
-  while (client.available() && !headersFinished) {
-    String headerLine = client.readStringUntil('\n');
-    if (headerLine == "\r") {
-      headersFinished = true;
-    }
-  }
-
-  // Read the body
-  while (client.connected() || client.available()) {
-    while (client.available()) {
-      byte buffer[2048]; // Adjust buffer size as necessary
-      size_t bytesRead = client.read(buffer, sizeof(buffer));
-      if (bytesRead > 0) {
-        // Ensure we do not overflow the gzippedResponse buffer
-        size_t toCopy = min(bytesRead, sizeof(gzippedResponse) - responseIndex);
-        memcpy(gzippedResponse + responseIndex, buffer, toCopy);
-        responseIndex += toCopy;
-      }
-    }
-    if (!client.connected()) {
-      break; // Exit the loop if the client has disconnected
-    }
-  }
-
-  // Process the response if any data was received
-  if (responseIndex > 0) {
-    decompressGzippedData(gzippedResponse, responseIndex);
-    responseIndex = 0; // Reset for next use
-  }
-
-  client.stop(); // Ensure the client is stopped
-  //Serial.println("Disconnected from server.");
-
-}
-
-void decompressGzippedData(const uint8_t *gzippedData, size_t gzippedDataSize) {
-    Serial.print("Attempting to decompress data of size: ");
-    Serial.println(gzippedDataSize);
-
-    // Use the getUncompressedLength function to determine the expected uncompressed size.
-    uint32_t expectedUncompressedSize = getUncompressedLength(gzippedData, gzippedDataSize);
-    uint8_t *uncompressedData = (uint8_t *)malloc(expectedUncompressedSize);
-
-    if (uncompressedData == NULL) {
-        Serial.println("Failed to allocate memory for decompression.");
-        return;
-    }
-
-    // Adjusting the pointer and size to skip the gzip header.
-    // Note: This simple approach assumes no extra fields in the header. Adjust if needed.
-    const size_t gzipHeaderSize = 10;
-    const uint8_t *deflateData = gzippedData + gzipHeaderSize;
-    size_t deflateDataSize = gzippedDataSize - gzipHeaderSize - 8; // Subtract 8 bytes for the gzip footer
-
-    mz_ulong outBytes = expectedUncompressedSize;
-    int status = tinfl_decompress_mem_to_mem(uncompressedData, outBytes, deflateData, deflateDataSize, 0);
-
-    if (status == TINFL_DECOMPRESS_MEM_TO_MEM_FAILED) {
-        Serial.println("Decompression failed.");
-    } else {
-        Serial.println("Decompression successful.");
-        // Clear the global String before use
-        globalUncompressedDataStr = "";
-
-        // Convert uncompressed data to String
-        for (size_t i = 0; i < outBytes; ++i) {
-            globalUncompressedDataStr += (char)uncompressedData[i];
-        }
-
-        globalUncompressedDataStr.trim(); // Removes whitespace from the beginning and end
-        Serial.println(globalUncompressedDataStr);
-    }
-
-    free(uncompressedData);
-}
-
-uint32_t getUncompressedLength(const uint8_t* data, size_t dataSize) {
-    if (dataSize < 4) return 0; // Not enough data to contain the uncompressed size
-
-    // The uncompressed size is stored in the last 4 bytes of the gzip stream in little-endian format
-    uint32_t uncompressedSize = data[dataSize - 4]
-        | (data[dataSize - 3] << 8)
-        | (data[dataSize - 2] << 16)
-        | (data[dataSize - 1] << 24);
-
-    return uncompressedSize;
-}
-
-void generateMAC()
-{
-  // Read unique ID string, write to uniqueIDString
-  for (size_t i = 0; i < 8; i++) {
-    if (UniqueID8[i] < 0x10) {
-      uniqueIDString += "0";
-    }
-    uniqueIDString += String(UniqueID8[i], HEX);
-  }
-
-  // Use the unique ID to set the MAC address
-  if (uniqueIDString.length() >= 12) {
-  // Loop through the last 6 bytes of the string
-    for (size_t i = 0; i < 6; i++) {
-      // Extract two characters (one byte in hex)
-      String hexByteStr = uniqueIDString.substring(uniqueIDString.length() - 12 + i * 2, uniqueIDString.length() - 10 + i * 2);
-      
-      // Convert the hex string to a byte
-      byte hexByte = (byte) strtol(hexByteStr.c_str(), NULL, 16);
-
-      // Assign this byte to the mac array
-      mac[i] = hexByte;
-    }
-  }
-
-  for (int i = 0; i < 6; i++) {
-    // Convert the byte to a hexadecimal string
-    if (mac[i] < 16) {
-        // Adding leading zero for bytes less than 16 (0x10)
-        MACAddress += "0";
-    }
-    MACAddress += String(mac[i], HEX);
-  }
-  MACAddress.toUpperCase();
-}
-
-
 void parseAndFormatBusArrivals(const String& jsonData) {
-
   // Clear existing data for the current stop code
   stopCodeDataArray[currentStopCodeIndex].arrivalCount = 0;
 
@@ -381,8 +369,6 @@ void parseAndFormatBusArrivals(const String& jsonData) {
       Serial.print(F("Server Time (epoch): "));
       Serial.println(serverTime);
 
-      // Use setTime which is part of the TimeLib.h if you want to set the system time
-      // Note: This sets the time for the Time library, which affects functions like now()
       setTime(serverTime);
       currentTime = serverTime;
   }
@@ -427,55 +413,52 @@ void removeOldArrivals() {
 }
 
 void displayArrivals() {
-    Serial.println();
-    currentTime = now(); // Ensure we have the current time updated
+  Serial.println();
+  currentTime = now(); // Ensure we have the current time updated
 
-    for (int stopCodeIndex = 0; stopCodeIndex < sizeof(stopCodes) / sizeof(stopCodes[0]); stopCodeIndex++) {
-        //Serial.print("Stop Code: ");
-        //Serial.println(stopCodeDataArray[stopCodeIndex].stopCode);
+  for (int stopCodeIndex = 0; stopCodeIndex < sizeof(stopCodes) / sizeof(stopCodes[0]); stopCodeIndex++) {
+    String lineRefs[100];
+    String destinations[100];
+    String stopPoints[100];
+    String minutesLists[100];
+    int uniqueLines = 0;
 
-        // Assuming a manageable number of unique lineRefs
-        String lineRefs[100];
-        String destinations[100];
-        String stopPoints[100];
-        String minutesLists[100];
-        int uniqueLines = 0;
+    for (int arrivalIndex = 0; arrivalIndex < stopCodeDataArray[stopCodeIndex].arrivalCount; arrivalIndex++) {
+      BusArrival& arrival = stopCodeDataArray[stopCodeIndex].arrivals[arrivalIndex];
+      time_t expectedArrivalEpoch = iso8601ToEpoch(arrival.expectedArrivalTimeStr);
+      long minutesUntilArrival = (expectedArrivalEpoch - currentTime) / 60;
 
-        for (int arrivalIndex = 0; arrivalIndex < stopCodeDataArray[stopCodeIndex].arrivalCount; arrivalIndex++) {
-            BusArrival& arrival = stopCodeDataArray[stopCodeIndex].arrivals[arrivalIndex];
-            time_t expectedArrivalEpoch = iso8601ToEpoch(arrival.expectedArrivalTimeStr);
-            long minutesUntilArrival = (expectedArrivalEpoch - currentTime) / 60;
+      if (expectedArrivalEpoch <= currentTime) continue; // Skip past or invalid arrivals
 
-            if (expectedArrivalEpoch <= currentTime) continue; // Skip past or invalid arrivals
-
-            // Find if this lineRef is already noted, else add it
-            int lineIndex = -1;
-            for (int i = 0; i < uniqueLines; i++) {
-                if (lineRefs[i] == arrival.lineRef && destinations[i] == arrival.destinationDisplay && stopPoints[i] == arrival.stopPointName) {
-                    lineIndex = i;
-                    break;
-                }
-            }
-
-            if (lineIndex == -1) { // New lineRef
-                lineIndex = uniqueLines++;
-                lineRefs[lineIndex] = arrival.lineRef;
-                destinations[lineIndex] = arrival.destinationDisplay;
-                stopPoints[lineIndex] = arrival.stopPointName;
-                minutesLists[lineIndex] = String(minutesUntilArrival);
-            } else { // Existing lineRef, append minutes
-                minutesLists[lineIndex] += ", " + String(minutesUntilArrival);
-            }
+      // Find if this lineRef is already noted, else add it
+      int lineIndex = -1;
+      for (int i = 0; i < uniqueLines; i++) {
+        if (lineRefs[i] == arrival.lineRef && destinations[i] == arrival.destinationDisplay && stopPoints[i] == arrival.stopPointName) {
+          lineIndex = i;
+          break;
         }
+      }
 
-        // Now print out the aggregated information
-        for (int i = 0; i < uniqueLines; i++) {
-            Serial.print(lineRefs[i] + " to ");
-            Serial.print(destinations[i] + " in ");
-            Serial.print(minutesLists[i] + " minutes at ");
-            Serial.println(stopPoints[i]);
-        }
+      if (lineIndex == -1) { // New lineRef
+        lineIndex = uniqueLines++;
+        lineRefs[lineIndex] = arrival.lineRef;
+        destinations[lineIndex] = arrival.destinationDisplay;
+        stopPoints[lineIndex] = arrival.stopPointName;
+        minutesLists[lineIndex] = String(minutesUntilArrival);
+      } 
+      else { // Existing lineRef, append minutes
+        minutesLists[lineIndex] += ", " + String(minutesUntilArrival);
+      }
     }
-    Serial.println(); // Extra line for readability
+
+    // Now print out the aggregated information
+    for (int i = 0; i < uniqueLines; i++) {
+      Serial.print(lineRefs[i] + " to ");
+      Serial.print(destinations[i] + " in ");
+      Serial.print(minutesLists[i] + " minutes at ");
+      Serial.println(stopPoints[i]);
+    }
+  }
+  Serial.println(); // Extra line for readability
 }
 
