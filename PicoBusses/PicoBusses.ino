@@ -21,17 +21,17 @@ String APIkey = "da03f504-fc16-43e7-a736-319af37570be";
 
 // You should not have to adjust anything below this line.
 
-#include "Globals.h"
-#include "miniz.h"
-#include "trust_anchors.h"
-
-#include <ArduinoJson.h>
-#include <ArduinoUniqueID.h>
-#include <EthernetLarge.h>
-#include <NTPClient.h>
 #include <SPI.h>
+#include <EthernetLarge.h>
 #include <SSLClient.h>
+#include "trust_anchors.h"
+#include "miniz.h"
+#include <ArduinoUniqueID.h>
+#include <NTPClient.h>
 #include <TimeLib.h>
+#include <ArduinoJson.h>
+#include "Globals.h"
+
 
 void generateMAC(void);
 
@@ -407,7 +407,7 @@ void removeOldArrivals() {
             }
             arrivalCount--; // Decrease the count of arrivals
         } else {
-            i++; // Only increase i if we didn't remove an arrival
+            i++; // Only increase if if we didn't remove an arrival
         }
     }
 }
