@@ -346,7 +346,7 @@ void parseAndFormatBusArrivals(const String& jsonData) {
   // Clear existing data for the current stop code
   stopCodeDataArray[currentStopCodeIndex].arrivalCount = 0;
 
-  // The first characters I'm getting are 0xEF 0xBB 0xBF, a byte order mark
+  // The first characters I'm getting are 0xEF 0xBB 0xBF, a byte order mark.
   //I need to delete those before deserializing.
   String cleanJsonData = jsonData.substring(3); 
 
@@ -366,8 +366,8 @@ void parseAndFormatBusArrivals(const String& jsonData) {
       // Convert ISO8601 to epoch
       time_t serverTime = iso8601ToEpoch(String(responseTimestamp));
 
-      Serial.print(F("Server Time (epoch): "));
-      Serial.println(serverTime);
+      //Serial.print(F("Server Time (epoch): "));
+      //Serial.println(serverTime);
 
       setTime(serverTime);
       currentTime = serverTime;
