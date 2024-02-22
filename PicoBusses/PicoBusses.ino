@@ -12,8 +12,8 @@
 // you want to access with this device. Or look at your
 // transit agency's website or something.
 */
-String stopCodes[] = {"15696", "15565", "13220", "15678"};
-//String stopCodes[] = {"15678"};
+String stopCodes[] = {"13565", "16633"};
+//String stopCodes[] = {"15696", "15565", "13220", "15678"};
 
 // This is your API key. You need a unique one
 // Sign up at https://511.org/open-data/token
@@ -30,8 +30,13 @@ String APIkey = "da03f504-fc16-43e7-a736-319af37570be";
 #include <NTPClient.h>
 #include <TimeLib.h>
 #include <ArduinoJson.h>
+#include "epdpaint.h"
+#include "epd3in7.h"
+#include "imagedata.h"
 #include "Globals.h"
 
+#define COLORED     0
+#define UNCOLORED   1
 
 void generateMAC(void);
 
@@ -41,7 +46,6 @@ time_t iso8601ToEpoch(String datetime);
 void getData(void);
 void decompressGzippedData(const uint8_t *gzippedData, size_t gzippedDataSize);
 uint32_t getUncompressedLength(const uint8_t* data, size_t dataSize);
-String extractExpectedArrivalTime(String data, time_t currentTime);
 void parseAndFormatBusArrivals(const String& jsonData);
 void removeOldArrivals(void);
 void displayArrivals(void);
@@ -54,7 +58,7 @@ void setup() {
   // Open serial communications and wait for port to open:
   Serial.begin(115200);
   delay(2000); //a non-blocking way for the Serial to connect?
-
+  
   // start the Ethernet connection:
   Serial.println("Initialize Ethernet with DHCP:");
   Serial.println("Mac Address: " + MACAddress);
@@ -79,6 +83,21 @@ void setup() {
   Serial.println(Ethernet.localIP());
   
   delay(1000); // give the Ethernet shield a second to initialize:
+
+  //Start with some e-paper stuff
+  /*
+  Epd epd;
+  if (epd.Init() != 0) {
+      Serial.print("e-Paper init failed");
+      return;
+  }
+  epd.Clear(1);
+  paint.SetWidth(280);
+  paint.SetHeight(480);
+  paint.SetRotate(ROTATE_270);
+  paint.Clear(UNCOLORED);
+  epd.Sleep();
+  */
 
   for (int i = 0; i < sizeof(stopCodes)/sizeof(stopCodes[0]); i++) {
     stopCodeDataArray[i].stopCode = stopCodes[i];
@@ -115,38 +134,38 @@ void loop() {
   }
 }
 
-void generateMAC(){
-  // Read unique ID string, write to uniqueIDString
-  for (size_t i = 0; i < 8; i++) {
-    if (UniqueID8[i] < 0x10) {
-      uniqueIDString += "0";
-    }
-    uniqueIDString += String(UniqueID8[i], HEX);
-  }
+void generateMAC() {
+  // Fixed prefix for locally administered and unicast addresses
+  mac[0] = 0xDE;
+  mac[1] = 0xAD;
+  mac[2] = 0xBE;
+  mac[3] = random(0, 255);
+  mac[4] = random(0, 255);
+  mac[5] = random(0, 255);
 
-  // Use the unique ID to set the MAC address
-  if (uniqueIDString.length() >= 12) {
-  // Loop through the last 6 bytes of the string
-    for (size_t i = 0; i < 6; i++) {
-      // Extract two characters (one byte in hex)
-      String hexByteStr = uniqueIDString.substring(uniqueIDString.length() - 12 + i * 2, uniqueIDString.length() - 10 + i * 2);
-      
-      // Convert the hex string to a byte
-      byte hexByte = (byte) strtol(hexByteStr.c_str(), NULL, 16);
+  // Clear the MACAddress string before assembling the new MAC address
+  MACAddress = ""; 
 
-      // Assign this byte to the mac array
-      mac[i] = hexByte;
-    }
-  }
-
+  Serial.print("Mac Address: ");
   for (int i = 0; i < 6; i++) {
-    // Convert the byte to a hexadecimal string
+    // Add leading zero for values less than 16 to ensure two characters for each byte
     if (mac[i] < 16) {
-        // Adding leading zero for bytes less than 16 (0x10)
-        MACAddress += "0";
+      MACAddress += "0";
     }
+    // Append the current byte to the MACAddress string
     MACAddress += String(mac[i], HEX);
+    if (i < 5) MACAddress += ":"; // Add colon separators except for the last byte
+    
+    // Also print the MAC address to the Serial monitor
+    if (mac[i] < 16) {
+      Serial.print("0");
+    }
+    Serial.print(mac[i], HEX);
+    if (i < 5) Serial.print(":");
   }
+  Serial.println();
+
+  // Convert MACAddress to upper case for consistency
   MACAddress.toUpperCase();
 }
 
@@ -304,42 +323,6 @@ uint32_t getUncompressedLength(const uint8_t* data, size_t dataSize) {
         | (data[dataSize - 1] << 24);
 
     return uncompressedSize;
-}
-
-//This might be a vestigial function, I have no idea delete this maybe?
-String extractExpectedArrivalTime(String data, time_t currentTime) {
-  String searchKey = "\"ExpectedArrivalTime\":\"";
-  int startIndex = 0;
-  int endIndex = 0;
-  String result = "";
-
-  // Search for all occurrences of the key
-  startIndex = data.indexOf(searchKey, startIndex);
-  while (startIndex != -1) {
-    // Adjust startIndex to get the actual starting position of the value
-    startIndex += searchKey.length();
-
-    // Find the end of the value
-    endIndex = data.indexOf("\"", startIndex);
-
-    // Extract the value
-    String arrivalTimeISO8601 = data.substring(startIndex, endIndex);
-    time_t arrivalEpoch = iso8601ToEpoch(arrivalTimeISO8601);
-
-    // Calculate difference in minutes
-    long minutesUntilArrival = (arrivalEpoch - currentTime) / 60;
-
-    // Add extracted value to the result string
-    if (result.length() > 0) {
-      result += ", ";  // Separate multiple values with a comma
-    }
-    result += String(minutesUntilArrival) + " minutes";
-
-    // Prepare for the next iteration
-    startIndex = data.indexOf(searchKey, endIndex);
-  }
-
-  return result;
 }
 
 void parseAndFormatBusArrivals(const String& jsonData) {

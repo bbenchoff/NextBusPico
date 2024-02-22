@@ -60,4 +60,9 @@ time_t currentTime;
 unsigned long previousMillis = 0; // Stores the last time the update was executed
 const long interval = 65000; // Interval at which to run (65 seconds)
 
+//// E-paper stuff
+unsigned char image[700];
+Paint paint(image, 0, 0);    // width should be the multiple of 8 
+
+
 #endif
