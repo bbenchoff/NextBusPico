@@ -7,7 +7,7 @@
 //
 //  String stopCodes[] = {"19777", "15301", "13220"};
 //
-// You cna find the stop codes for your bus stop by
+// You can find the stop codes for your bus stop by
 // looking at goole maps and clicking on the bus stop
 // you want to access with this device. Or look at your
 // transit agency's website or something.

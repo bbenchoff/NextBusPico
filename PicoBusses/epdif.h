@@ -31,6 +31,8 @@
 #include <Arduino.h>
 
 // Pin definition for Pi Pico
+#define EPD_MOSI_PIN        11
+#define EPD_SCK_PIN         10
 #define EPD_RST_PIN         12
 #define EPD_DC_PIN          8
 #define EPAPER_CS_PIN       9

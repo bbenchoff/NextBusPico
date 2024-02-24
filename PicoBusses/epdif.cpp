@@ -62,21 +62,29 @@ void EpdIf::DelayMs(unsigned int delaytime) {
 }
 
 void EpdIf::SpiTransfer(unsigned char data) {
-    digitalWrite(EPAPER_CS_PIN, LOW);
-    SPI1.transfer(data);
-    digitalWrite(EPAPER_CS_PIN, HIGH);
+    for (int i = 0; i < 8; i++) {
+        digitalWrite(EPD_SCK_PIN, LOW);
+        delayMicroseconds(1); // Ensure timing
+        digitalWrite(EPD_MOSI_PIN, (data & 0x80) ? HIGH : LOW); // Set MOSI
+        data <<= 1; // Shift next bit into position
+        delayMicroseconds(1); // Setup time
+        digitalWrite(EPD_SCK_PIN, HIGH); // Clock high
+        delayMicroseconds(1); // Hold time
+    }
 }
+
 
 int EpdIf::IfInit(void) {
     pinMode(EPAPER_CS_PIN, OUTPUT);
     pinMode(EPD_RST_PIN, OUTPUT);
     pinMode(EPD_DC_PIN, OUTPUT);
+    pinMode(EPD_MOSI_PIN, OUTPUT);
+    pinMode(EPD_SCK_PIN, OUTPUT);
     //pinMode(EPD_BUSY_PIN, INPUT);  //Ethernet uses the busy pin
-    SPI1.setTX(11);
-    SPI1.setCS(EPAPER_CS_PIN);
-    SPI1.setSCK(10);
-    SPI1.begin();
-    SPI1.beginTransaction(SPISettings(3600000, MSBFIRST, SPI_MODE0));
-    
+    //SPI1.setTX(11);
+    //SPI1.setCS(EPAPER_CS_PIN);
+    //SPI1.setSCK(10);
+    //SPI1.begin();
+    //SPI1.beginTransaction(SPISettings(3600000, MSBFIRST, SPI_MODE0));
     return 0;
 }
