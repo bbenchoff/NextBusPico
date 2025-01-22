@@ -5,7 +5,7 @@
 #define ETHERNET_LARGE_BUFFERS
 
 //// Data for output. This is the data structure we actually use
-#define MAX_ARRIVALS 100 // Maximum number of arrivals we can store
+#define MAX_ARRIVALS 20 // Maximum number of arrivals we can store
 
 struct BusArrival {
     String lineRef;
@@ -61,7 +61,8 @@ unsigned long previousMillis = 0; // Stores the last time the update was execute
 const long interval = 65000; // Interval at which to run (65 seconds)
 
 //// E-paper stuff
-unsigned char image[700];
+Epd epd;
+unsigned char image[70];
 Paint paint(image, 0, 0);    // width should be the multiple of 8 
 
 

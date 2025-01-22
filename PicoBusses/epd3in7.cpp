@@ -207,7 +207,7 @@ void Epd::WaitUntilIdle(void) {
     //do {
     //    busy = DigitalRead(busy_pin);
     //} while(busy);    
-    DelayMs(1000);
+    delay(1500);
     //Serial.print("e-Paper busy release \r\n ");
 }
 

@@ -85,18 +85,19 @@ void setup() {
   delay(1000); // give the Ethernet shield a second to initialize:
 
   //Start with some e-paper stuff
-  /*
-  Epd epd;
   if (epd.Init() != 0) {
       Serial.print("e-Paper init failed");
       return;
   }
+  /*
   epd.Clear(1);
   paint.SetWidth(280);
   paint.SetHeight(480);
   paint.SetRotate(ROTATE_270);
   paint.Clear(UNCOLORED);
   epd.Sleep();
+
+  Serial.println("yes I cleared the screen");
   */
 
   for (int i = 0; i < sizeof(stopCodes)/sizeof(stopCodes[0]); i++) {
@@ -104,12 +105,15 @@ void setup() {
     stopCodeDataArray[i].arrivalCount = 0; // Initialize the count of arrivals to 0
   }
 
-  currentTime = now();
+  //currentTime = now();
+
+  Serial.println("finished setup");
 
 }
   
 void loop() {
 
+  int counter = 0;
   unsigned long currentMillis;
   currentMillis = millis(); // capture the current time
 
@@ -130,7 +134,12 @@ void loop() {
         Serial.println("No data or failed to fetch data");
     }
     Serial.println("");
-    Serial.println("");
+    Serial.println(""); 
+    /*
+    paint.DrawStringAt(10, -20, String(counter).c_str(), &Font72, COLORED);
+    bool isBase = false;
+    epd.DisplayFrame(image, isBase);
+    */
   }
 }
 
@@ -201,6 +210,8 @@ void getData(String stopCode){
   bool isGzip = false;
   String line;
 
+  Serial.println("Got to getData");
+
   // Attempt to connect with retries
   while (!connected && retryCount < maxRetries) {
     if (client.connect(server, 443)) {
@@ -218,6 +229,7 @@ void getData(String stopCode){
   }
 
   // Send the HTTP GET request
+  Serial.println("Sending HTTPS request");
   client.println("GET /transit/StopMonitoring?api_key=" + APIkey + "&agency=SF&stopCode=" + stopCode + "&format=json HTTP/1.1");
   client.println("User-Agent: " + User_Agent);
   client.println("Host: " + String(server_host));
