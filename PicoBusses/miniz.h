@@ -1,6 +1,10 @@
 #ifndef MINIZ_EXPORT
 #define MINIZ_EXPORT
 #endif
+
+
+#define MINIZ_NO_TIME
+
 /* miniz.c 3.0.0 - public domain deflate/inflate, zlib-subset, ZIP reading/writing/appending, PNG writing
    See "unlicense" statement at the end of this file.
    Rich Geldreich <richgel99@gmail.com>, last updated Oct. 13, 2013

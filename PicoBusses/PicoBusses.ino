@@ -11,18 +11,38 @@
 // looking at goole maps and clicking on the bus stop
 // you want to access with this device. Or look at your
 // transit agency's website or something.
+//
+//  Using the actual cable car termini (stops "16063", 
+//  "15063", "16644", "13860", and "13889") results in
+//  times that are about 58 years in the future. Using
+//  the next stop up from the cable car terminus (stops
+//  "15081", "16068", "16645", "13855", and "13889")
+//  gives you the actual time the next car will arrive.
+//  This behavior correctly encodes something unique
+//  about San Francisco. Locals do not wait in line at
+//  the cable car termini. To board a cable car, you go
+//  to the next stop up.
 */
 String stopCodes[] = {"13565", "16633"};
-//String stopCodes[] = {"15696", "15565", "13220", "15678"};
+//String stopCodes[] = {"15696", "15565", "13220", "15678"};  //Market and Van Ness
+//String stopCodes[] = {"69925", "13211", "15300", "13220", "17999", "17996", "15301"}; //9th and Irving
+//String stopCodes[] = {"15081", "16068", "16645", "13855", "13889"}; //One block up from each cable car termini
+//String stopCodes[] = {"14114", "16061", "14105"}; // Cable Car and Coit demo
+//String stopCodes[] = {"13124", "13144"}; // The two busiest stops, 3rd St & Folsom St and 3rd St & Bryant St
+
 
 // This is your API key. You need a unique one
 // Sign up at https://511.org/open-data/token
 String APIkey = "da03f504-fc16-43e7-a736-319af37570be";
 
+//#define DEBUG_MODE
+
 // You should not have to adjust anything below this line.
 
 #include <SPI.h>
-#include <EthernetLarge.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+
 #include <SSLClient.h>
 #include "trust_anchors.h"
 #include "miniz.h"
@@ -30,19 +50,32 @@ String APIkey = "da03f504-fc16-43e7-a736-319af37570be";
 #include <NTPClient.h>
 #include <TimeLib.h>
 #include <ArduinoJson.h>
-#include "epdpaint.h"
-#include "epd3in7.h"
 #include "imagedata.h"
 #include "Globals.h"
+
+#include "MT_EPD.h"
 
 #define COLORED     0
 #define UNCOLORED   1
 
-void generateMAC(void);
+// Pin definitions
+#define EPD_BS    26  // Bus Select
+#define EPD_BUSY  22  // Busy signal
+#define EPD_RST   21  // Reset
+#define EPD_DC    20  // Data/Command
+#define EPD_MOSI  19  // SPI MOSI
+#define EPD_SCK   18  // SPI Clock
+#define EPD_CS    17  // Chip Select
+
+// WiFi credentials
+const char* ssid = "LiveLaughLan";
+const char* password = "666HailSatan!";
 
 String CurrentTimeToString(time_t time);
 time_t iso8601ToEpoch(String datetime);
+MT_EPD display(EPD_CS, EPD_DC, EPD_RST, EPD_BUSY);
 
+void printHexBuffer(const uint8_t* buffer, size_t length);
 void getData(void);
 void decompressGzippedData(const uint8_t *gzippedData, size_t gzippedDataSize);
 uint32_t getUncompressedLength(const uint8_t* data, size_t dataSize);
@@ -52,60 +85,85 @@ void displayArrivals(void);
 
 
 void setup() {
-
-  generateMAC();
-  Ethernet.init(17); // 17 is specific to the W5500-EVB
-  // Open serial communications and wait for port to open:
   Serial.begin(115200);
-  delay(2000); //a non-blocking way for the Serial to connect?
+  delay(3000);
+  Serial.println("EPD Test");
+
+  // Configure pins first
+  pinMode(EPD_BS, OUTPUT);
+  pinMode(EPD_CS, OUTPUT);
+  pinMode(EPD_DC, OUTPUT);
+  pinMode(EPD_RST, OUTPUT);
+  pinMode(EPD_BUSY, INPUT);
   
-  // start the Ethernet connection:
-  Serial.println("Initialize Ethernet with DHCP:");
-  Serial.println("Mac Address: " + MACAddress);
-  if (Ethernet.begin(mac) == 0) {
-    Serial.println("Failed to configure Ethernet using DHCP");
-    // Check for Ethernet hardware present
-    if (Ethernet.hardwareStatus() == EthernetNoHardware) {
-      Serial.println("Ethernet shield was not found.  Sorry, can't run without hardware. :(");
-      while (true) {
-        delay(1); // do nothing, no point running without Ethernet hardware
-      }
+  // Set initial pin states
+  digitalWrite(EPD_BS, LOW);   // 4-wire mode
+  digitalWrite(EPD_CS, HIGH);  // Deselect
+  digitalWrite(EPD_DC, HIGH);  // Data mode
+  digitalWrite(EPD_RST, HIGH); // Not in reset
+
+  // Configure SPI
+  SPI.setSCK(EPD_SCK);
+  SPI.setTX(EPD_MOSI);
+  SPI.begin();
+  SPI.beginTransaction(SPISettings(2000000, MSBFIRST, SPI_MODE0));
+
+  delay(100);
+  // Initialize display
+  display.begin();
+  
+  // Clear to white
+  display.clearDisplay();
+  delay(1000);  // Wait for clear to complete
+  
+  // Draw test pattern - larger black box
+  for(int i=100; i<300; i++) {
+    for(int j=100; j<300; j++) {
+      display.drawPixel(i, j, MT_EPD::EPD_BLACK);
     }
-    if (Ethernet.linkStatus() == LinkOFF) {
-      Serial.println("Ethernet cable is not connected.");
-    }
-    // try to configure using IP address instead of DHCP:
-    Ethernet.begin(mac, ip, myDns);
-  } 
-  else {
-        Serial.print("DHCP assigned IP ");
   }
-  Serial.println(Ethernet.localIP());
   
+  // Draw smaller red box
+  for(int i=400; i<500; i++) {
+    for(int j=200; j<300; j++) {
+      display.drawPixel(i, j, MT_EPD::EPD_RED);
+    }
+  }
+  
+  display.display();
+  Serial.println("Setup complete");
+
+  //Start the WiFi
+  Serial.print("Initializing WiFI\n");
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+
+  // Wait for connection
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  
+  Serial.println("\nConnected to WiFi!");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
   delay(1000); // give the Ethernet shield a second to initialize:
 
-  //Start with some e-paper stuff
-  if (epd.Init() != 0) {
-      Serial.print("e-Paper init failed");
-      return;
-  }
-  /*
-  epd.Clear(1);
-  paint.SetWidth(280);
-  paint.SetHeight(480);
-  paint.SetRotate(ROTATE_270);
-  paint.Clear(UNCOLORED);
-  epd.Sleep();
 
-  Serial.println("yes I cleared the screen");
-  */
 
   for (int i = 0; i < sizeof(stopCodes)/sizeof(stopCodes[0]); i++) {
     stopCodeDataArray[i].stopCode = stopCodes[i];
     stopCodeDataArray[i].arrivalCount = 0; // Initialize the count of arrivals to 0
   }
 
-  //currentTime = now();
+
+    Serial.println("Testing connection to Google...");
+  if (!wifiClient.connect("172.217.164.110", 443)) {
+      Serial.println("Failed to connect to Google! Check DNS or network.");
+  } else {
+      Serial.println("Connected to Google successfully!");
+  }
 
   Serial.println("finished setup");
 
@@ -121,12 +179,16 @@ void loop() {
     previousMillis = currentMillis;
     
     getData(stopCodeDataArray[currentStopCodeIndex].stopCode);
+    #ifdef DEBUG_MODE
     Serial.println(CurrentTimeToString(currentTime));
+    #endif
     removeOldArrivals();
 
     if (globalUncompressedDataStr.length() > 0) {
+        #ifdef DEBUG_MODE
         Serial.print("JSON string length: ");
         Serial.println(globalUncompressedDataStr.length());
+        #endif
         parseAndFormatBusArrivals(globalUncompressedDataStr);
         displayArrivals();
         currentStopCodeIndex = (currentStopCodeIndex + 1) % (sizeof(stopCodes)/sizeof(stopCodes[0]));
@@ -135,47 +197,7 @@ void loop() {
     }
     Serial.println("");
     Serial.println(""); 
-    /*
-    paint.DrawStringAt(10, -20, String(counter).c_str(), &Font72, COLORED);
-    bool isBase = false;
-    epd.DisplayFrame(image, isBase);
-    */
   }
-}
-
-void generateMAC() {
-  // Fixed prefix for locally administered and unicast addresses
-  mac[0] = 0xDE;
-  mac[1] = 0xAD;
-  mac[2] = 0xBE;
-  mac[3] = random(0, 255);
-  mac[4] = random(0, 255);
-  mac[5] = random(0, 255);
-
-  // Clear the MACAddress string before assembling the new MAC address
-  MACAddress = ""; 
-
-  Serial.print("Mac Address: ");
-  for (int i = 0; i < 6; i++) {
-    // Add leading zero for values less than 16 to ensure two characters for each byte
-    if (mac[i] < 16) {
-      MACAddress += "0";
-    }
-    // Append the current byte to the MACAddress string
-    MACAddress += String(mac[i], HEX);
-    if (i < 5) MACAddress += ":"; // Add colon separators except for the last byte
-    
-    // Also print the MAC address to the Serial monitor
-    if (mac[i] < 16) {
-      Serial.print("0");
-    }
-    Serial.print(mac[i], HEX);
-    if (i < 5) Serial.print(":");
-  }
-  Serial.println();
-
-  // Convert MACAddress to upper case for consistency
-  MACAddress.toUpperCase();
 }
 
 String CurrentTimeToString(time_t time) {
@@ -203,126 +225,198 @@ time_t iso8601ToEpoch(String datetime) {
     return makeTime(tm);
 }
 
-void getData(String stopCode){
-  const int maxRetries = 3; // Maximum number of connection retries
+// Add the implementation of the helper function
+void printHexBuffer(const uint8_t* buffer, size_t length) {
+  for (size_t i = 0; i < length; i++) {
+    if (buffer[i] < 0x10) {
+      Serial.print("0"); // Add leading zero for values < 0x10
+    }
+    Serial.print(buffer[i], HEX);
+    Serial.print(" ");
+    if ((i + 1) % 16 == 0) { // Line break every 16 bytes
+      Serial.println();
+    }
+  }
+  Serial.println(); // Final newline
+}
+
+void getData(String stopCode) {
+  const int maxRetries = 3;
   int retryCount = 0;
-  bool connected = false;
-  bool isGzip = false;
-  String line;
+  bool requestSuccess = false;
 
+  #ifdef DEBUG_MODE
   Serial.println("Got to getData");
+  Serial.println("Attempting to connect to server...");
+  #endif
 
-  // Attempt to connect with retries
-  while (!connected && retryCount < maxRetries) {
-    if (client.connect(server, 443)) {
-      connected = true;
-    } else {
-      Serial.println("Connection attempt failed, retrying...");
+  while (!requestSuccess && retryCount < maxRetries) {
+    // Make sure we start with a fresh connection
+    client.stop();
+    delay(100);  // Give it a moment to clean up
+
+    #ifdef DEBUG_MODE
+    Serial.print("Connecting to: ");
+    Serial.print(server);
+    Serial.println(":443");
+    #endif
+
+    if (!client.connect(server, 443)) {
+      Serial.println("Connection failed! Check server name, WiFi, or SSL.");
       retryCount++;
-      delay(2000); // Wait 2 seconds before retrying
+      delay(1000);
+      continue;
     }
-  }
 
-  if (!connected) {
-    Serial.println("Failed to connect after retries, exiting function.");
-    return; // Exit if still not connected after retries
-  }
+    #ifdef DEBUG_MODE
+    Serial.println("Connected to server! Sending request...");
+    #endif
 
-  // Send the HTTP GET request
-  Serial.println("Sending HTTPS request");
-  client.println("GET /transit/StopMonitoring?api_key=" + APIkey + "&agency=SF&stopCode=" + stopCode + "&format=json HTTP/1.1");
-  client.println("User-Agent: " + User_Agent);
-  client.println("Host: " + String(server_host));
-  client.println("Connection: close");
-  client.println(); // End of headers
+    String path = "/transit/StopMonitoring?api_key=" + 
+                 APIkey + "&agency=SF&stopCode=" + stopCode + "&format=json";
 
-  // Wait for response or timeout
-  unsigned long startTime = millis();
-  while (!client.available()) {
-    if (millis() - startTime > 5000) { // 5-second timeout
-      Serial.println("Timeout waiting for server response.");
-      client.stop();
-      return;
-    }
-  }
+    // Send HTTP request
+    String request = "GET " + path + " HTTP/1.1\r\n";
+    request += "Host: " + String(server) + "\r\n";
+    request += "User-Agent: " + User_Agent + "\r\n";
+    request += "Connection: close\r\n\r\n";
+    
+    // Send the complete request at once
+    client.print(request);
 
-  // Read the HTTP status line
-  String statusLine = client.readStringUntil('\n');
-  Serial.println(statusLine); // Log the status line for debugging
+    // Wait a bit for the response to start coming in
+    delay(100);
 
-  // Read and discard headers, looking for the end of the headers section
-  bool headersFinished = false;
-  while (client.available() && !headersFinished) {
-    String headerLine = client.readStringUntil('\n');
-    if (headerLine == "\r") {
-      headersFinished = true;
-    }
-  }
-
-  // Read the body
-  while (client.connected() || client.available()) {
-    while (client.available()) {
-      byte buffer[2048]; // Adjust buffer size as necessary
-      size_t bytesRead = client.read(buffer, sizeof(buffer));
-      if (bytesRead > 0) {
-        size_t toCopy = min(bytesRead, sizeof(gzippedResponse) - responseIndex);
-        memcpy(gzippedResponse + responseIndex, buffer, toCopy);
-        responseIndex += toCopy;
+    // Read the response while the connection is alive
+    String response = "";
+    unsigned long timeout = millis();
+    
+    while (client.connected() && (millis() - timeout < 5000)) {
+      while (client.available()) {
+        char c = client.read();
+        response += c;
+        timeout = millis();  // Reset timeout when we receive data
       }
     }
-    if (!client.connected()) {
-      break; // Exit the loop if the client has disconnected
+
+    // Clean up the connection
+    client.stop();
+
+    if (response.length() > 0) {
+      #ifdef DEBUG_MODE
+      Serial.println("\nResponse received:");
+      Serial.println(response);
+      #endif
+      // Look for the end of headers (double newline)
+      int bodyStart = response.indexOf("\r\n\r\n");
+      if (bodyStart > 0) {
+        String body = response.substring(bodyStart + 4);
+        #ifdef DEBUG_MODE
+        Serial.println("\nBody length: " + String(body.length()));
+        #endif
+        // Convert to bytes for decompression
+        size_t bodyLen = body.length();
+        uint8_t* bodyBytes = (uint8_t*)malloc(bodyLen);
+        if (bodyBytes != nullptr) {
+          memcpy(bodyBytes, body.c_str(), bodyLen);
+          #ifdef DEBUG_MODE
+          printHexBuffer(bodyBytes, bodyLen);  // Print hex values
+          #endif
+          decompressGzippedData(bodyBytes, (size_t)bodyLen);  // Explicitly cast to size_t
+          free(bodyBytes);
+          requestSuccess = true;
+        } else {
+          #ifdef DEBUG_MODE
+          Serial.println("Failed to allocate memory for body");
+          #endif
+        }
+      }
+    } else {
+      #ifdef DEBUG_MODE
+      Serial.println("No response received");
+      #endif
+      retryCount++;
     }
   }
 
-  // Process the response if any data was received
-  if (responseIndex > 0) {
-    decompressGzippedData(gzippedResponse, responseIndex);
-    responseIndex = 0; // Reset for next use
+  if (!requestSuccess) {
+
+    #ifdef DEBUG_MODE
+    Serial.println("Failed to get data after all retries");
+    #endif
+    globalUncompressedDataStr = "";
   }
-
-  client.stop();
-
 }
 
 void decompressGzippedData(const uint8_t *gzippedData, size_t gzippedDataSize) {
+  #ifdef DEBUG_MODE
   Serial.print("Attempting to decompress data of size: ");
   Serial.println(gzippedDataSize);
+  #endif
 
-  // Use the getUncompressedLength function to determine the expected uncompressed size.
-  uint32_t expectedUncompressedSize = getUncompressedLength(gzippedData, gzippedDataSize);
-  uint8_t *uncompressedData = (uint8_t *)malloc(expectedUncompressedSize);
-
-  if (uncompressedData == NULL) {
-      Serial.println("Failed to allocate memory for decompression.");
-      return;
+  // Find the start of the gzip data by looking for the gzip magic numbers
+  size_t dataStart = 0;
+  for (size_t i = 0; i < gzippedDataSize - 1; i++) {
+    if (gzippedData[i] == 0x1F && gzippedData[i + 1] == 0x8B) {
+      dataStart = i;
+      break;
+    }
   }
 
-  // This subtracts 8 bytes from the header, because that's how this works
+  // Get the actual gzipped data size
+  size_t actualGzipSize = gzippedDataSize - dataStart;
+  
+  // Use the getUncompressedLength function to determine the expected uncompressed size
+  uint32_t expectedUncompressedSize = getUncompressedLength(gzippedData + dataStart, actualGzipSize);
+  
+  if (expectedUncompressedSize == 0) {
+    #ifdef DEBUG_MODE
+    Serial.println("Invalid gzip data or couldn't determine uncompressed size");
+    #endif
+    return;
+  }
+
+  uint8_t *uncompressedData = (uint8_t *)malloc(expectedUncompressedSize);
+  if (uncompressedData == NULL) {
+    #ifdef DEBUG_MODE
+    Serial.println("Failed to allocate memory for decompression.");
+    #endif
+    return;
+  }
+
+  // The gzip header is usually 10 bytes
   const size_t gzipHeaderSize = 10;
-  const uint8_t *deflateData = gzippedData + gzipHeaderSize;
-  size_t deflateDataSize = gzippedDataSize - gzipHeaderSize - 8; // Subtract 8 bytes for the gzip footer
+  const uint8_t *deflateData = gzippedData + dataStart + gzipHeaderSize;
+  size_t deflateDataSize = actualGzipSize - gzipHeaderSize - 8; // Subtract 8 bytes for the gzip footer
 
   mz_ulong outBytes = expectedUncompressedSize;
   int status = tinfl_decompress_mem_to_mem(uncompressedData, outBytes, deflateData, deflateDataSize, 0);
 
   if (status == TINFL_DECOMPRESS_MEM_TO_MEM_FAILED) {
-      Serial.println("Decompression failed.");
+    #ifdef DEBUG_MODE
+    Serial.println("Decompression failed.");
+    #endif
   } 
   else {
+    #ifdef DEBUG_MODE
     Serial.println("Decompression successful.");
+    #endif
     globalUncompressedDataStr = "";
 
     // Convert uncompressed data to String
     for (size_t i = 0; i < outBytes; ++i) {
       globalUncompressedDataStr += (char)uncompressedData[i];
     }
-
-    globalUncompressedDataStr.trim(); // Removes whitespace from the beginning and end
+    #ifdef DEBUG_MODE
+    Serial.println("Decompressed data:");
     Serial.println(globalUncompressedDataStr);
+    #endif
+
+
   }
   free(uncompressedData);
 }
+
 
 uint32_t getUncompressedLength(const uint8_t* data, size_t dataSize) {
     if (dataSize < 4) return 0; // this isn't right, bail.
@@ -350,8 +444,10 @@ void parseAndFormatBusArrivals(const String& jsonData) {
   DeserializationError error = deserializeJson(doc, cleanJsonData);
 
   if (error) {
+    #ifdef DEBUG_MODE
     Serial.print(F("deserializeJson() failed: "));
     Serial.println(error.f_str());
+    #endif
     return;
   }
 
