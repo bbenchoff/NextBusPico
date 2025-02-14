@@ -107,7 +107,8 @@ void setup() {
   SPI.begin();
   SPI.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
 
-  Serial.println("Initializing display...");
+    
+    Serial.println("Initializing display...");
     display.begin();
     
     // Clear display first
@@ -115,17 +116,11 @@ void setup() {
     display.clearDisplay();
     delay(2000);
     
-    // Draw a series of boxes to test bit alignment
+    // Draw a single test box
     Serial.println("Drawing test pattern...");
-    // Box aligned to byte boundary
-    display.drawBox(0, 100, 16, 100, MT_EPD::EPD_BLACK);
-    delay(1000);
-    // Box not aligned to byte boundary
-    display.drawBox(20, 100, 10, 100, MT_EPD::EPD_BLACK);
-    delay(1000);
-    // Box spanning multiple bytes
-    display.drawBox(300, 200, 24, 100, MT_EPD::EPD_BLACK);
-    delay(1000);
+    display.drawBox(100, 100, 200, 100, MT_EPD::EPD_BLACK);
+    delay(2000);
+    display.display();
     
     Serial.println("Entering sleep mode...");
     display.sleep();

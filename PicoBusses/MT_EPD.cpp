@@ -66,31 +66,36 @@ void MT_EPD::begin(void) {
     reset();
     delay(100);
     
-    // Init sequence from datasheet
+    // Init sequence exactly matching DEPG0750RWU790F30
     sendCommand(0x01);    // POWER SETTING
     sendData(0x07);
     sendData(0x07);      // VGH=20V,VGL=-20V
     sendData(0x3f);      // VDH=15V
     sendData(0x3f);      // VDL=-15V
-    
-    sendCommand(0x06);    // Booster Soft Start
-    sendData(0x17);
-    sendData(0x17);
-    sendData(0x17);
 
     sendCommand(0x04);    // Power on
-    waitUntilIdle();
-    
-    sendCommand(0x00);    // Panel Setting
-    sendData(0x0f);      // KW mode
-    
+    waitUntilIdle();     // Wait for power-on completion
+
+    sendCommand(0x00);    // PANEL SETTING
+    sendData(0x0f);      // KW-3f   KWR-2F BWROTP 0f BWOTP 1f
+
     sendCommand(0x61);    // Resolution setting
     sendData(0x03);      // 800
     sendData(0x20);
     sendData(0x01);      // 480
     sendData(0xE0);
-    
-    // Set LUT
+
+    sendCommand(0x15);    // Dual SPI mode
+    sendData(0x00);
+
+    sendCommand(0x50);    // VCOM AND DATA INTERVAL SETTING
+    sendData(0x11);      // Changed from previous value
+    sendData(0x07);
+
+    sendCommand(0x60);    // TCON setting
+    sendData(0x22);
+
+    // LUT settings
     sendCommand(0x20);    // VCOM LUT
     for(int i = 0; i < 44; i++) {
         sendData(LUT_VCOM[i]);
@@ -116,50 +121,43 @@ void MT_EPD::begin(void) {
         sendData(LUT_BB[i]);
     }
 
-    sendCommand(0x50);    // VCOM AND DATA INTERVAL SETTING
-    sendData(0x11);
-    sendData(0x07);
-
-    Serial.println("Power on complete");
+    Serial.println("Initialization complete");
 }
 
 void MT_EPD::clearDisplay(void) {
     Serial.println("Clearing display...");
     
-    // Calculate number of bytes needed
+    // Calculate bytes needed
     uint32_t bytes_per_line = _width / 8;
-    uint8_t* line_buffer = new uint8_t[bytes_per_line];
-    memset(line_buffer, 0xFF, bytes_per_line);  // Set all bits to 1 for white
     
-    // First data transmission - old data
+    // First data transmission (DTM1 - old data)
     sendCommand(0x10);
     digitalWrite(_dc_pin, HIGH);
     digitalWrite(_cs_pin, LOW);
     
+    // White for all pixels (0xFF)
     for(int y = 0; y < _height; y++) {
         for(int x = 0; x < bytes_per_line; x++) {
-            SPI.transfer(line_buffer[x]);
+            SPI.transfer(0xFF);
         }
     }
     digitalWrite(_cs_pin, HIGH);
 
-    // Second data transmission - new data
+    // Second data transmission (DTM2 - new data)
     sendCommand(0x13);
     digitalWrite(_dc_pin, HIGH);
     digitalWrite(_cs_pin, LOW);
     
+    // White for all pixels (0xFF)
     for(int y = 0; y < _height; y++) {
         for(int x = 0; x < bytes_per_line; x++) {
-            SPI.transfer(line_buffer[x]);
+            SPI.transfer(0xFF);
         }
     }
     digitalWrite(_cs_pin, HIGH);
-    
-    delete[] line_buffer;
 
-    // Refresh display
+    // Display Refresh
     sendCommand(0x12);
-    delay(100);
     waitUntilIdle();
     
     Serial.println("Clear complete");
@@ -173,101 +171,86 @@ void MT_EPD::display() {
 }
 
 void MT_EPD::sleep(void) {
-    sendCommand(0x02);  // Power off
+    sendCommand(0x02);    // Power off
     waitUntilIdle();
-    sendCommand(0x07);  // Deep sleep
-    sendData(0xA5);     // Deep sleep check code
+    sendCommand(0x07);    // Deep sleep
+    sendData(0xA5);     // Check code
 }
 
 void MT_EPD::drawBox(int x_start, int y_start, int width, int height, uint16_t color) {
     Serial.println("Drawing box...");
-
-    // Calculate which bit in the byte we start with
-    int start_bit = x_start % 8;
+    
+    uint32_t bytes_per_line = _width / 8;
+    uint8_t* line_buffer = new uint8_t[bytes_per_line];
+    
+    // Calculate bit positions
     int start_byte = x_start / 8;
+    int end_byte = (x_start + width - 1) / 8;
+    uint8_t start_bit = x_start % 8;
+    uint8_t end_bit = (x_start + width - 1) % 8;
     
-    // Calculate bytes needed to cover the width
-    int byte_width = (width + start_bit + 7) / 8;
-
-    // Create a buffer for one line
-    uint8_t* line_buffer = new uint8_t[_width/8];
-    
-    // First data transmission - old data
+    // First data transmission (DTM1)
     sendCommand(0x10);
     digitalWrite(_dc_pin, HIGH);
     digitalWrite(_cs_pin, LOW);
     
     for(int y = 0; y < _height; y++) {
         // Fill buffer with white
-        memset(line_buffer, 0xFF, _width/8);
+        memset(line_buffer, 0xFF, bytes_per_line);
         
-        // If we're in the box's y-range
         if(y >= y_start && y < (y_start + height)) {
-            // Set the appropriate bits in each affected byte
-            for(int i = 0; i < byte_width; i++) {
+            // Calculate black pixels for the current line
+            for(int byte_idx = start_byte; byte_idx <= end_byte; byte_idx++) {
                 uint8_t mask = 0xFF;
                 
                 // Handle first byte
-                if(i == 0 && start_bit > 0) {
-                    mask = 0xFF >> start_bit;
+                if(byte_idx == start_byte) {
+                    mask &= (0xFF >> start_bit);
                 }
                 
                 // Handle last byte
-                if(i == byte_width-1) {
-                    int end_bit = (x_start + width) % 8;
-                    if(end_bit > 0) {
-                        mask &= 0xFF << (8 - end_bit);
-                    }
+                if(byte_idx == end_byte) {
+                    mask &= (0xFF << (7 - end_bit));
                 }
                 
-                // Set or clear bits based on color
+                // Apply color (0x00 for black, 0xFF for white)
                 if(color == EPD_BLACK) {
-                    line_buffer[start_byte + i] &= ~mask;  // Clear bits for black
-                } else {
-                    line_buffer[start_byte + i] |= mask;   // Set bits for white
+                    line_buffer[byte_idx] &= ~mask;
                 }
             }
         }
         
         // Send the line
-        for(int x = 0; x < _width/8; x++) {
+        for(int x = 0; x < bytes_per_line; x++) {
             SPI.transfer(line_buffer[x]);
         }
     }
     digitalWrite(_cs_pin, HIGH);
 
-    // Second data transmission - new data
+    // Second data transmission (DTM2)
     sendCommand(0x13);
     digitalWrite(_dc_pin, HIGH);
     digitalWrite(_cs_pin, LOW);
     
     for(int y = 0; y < _height; y++) {
-        memset(line_buffer, 0xFF, _width/8);
+        memset(line_buffer, 0xFF, bytes_per_line);
         
         if(y >= y_start && y < (y_start + height)) {
-            for(int i = 0; i < byte_width; i++) {
+            for(int byte_idx = start_byte; byte_idx <= end_byte; byte_idx++) {
                 uint8_t mask = 0xFF;
-                
-                if(i == 0 && start_bit > 0) {
-                    mask = 0xFF >> start_bit;
+                if(byte_idx == start_byte) {
+                    mask &= (0xFF >> start_bit);
                 }
-                
-                if(i == byte_width-1) {
-                    int end_bit = (x_start + width) % 8;
-                    if(end_bit > 0) {
-                        mask &= 0xFF << (8 - end_bit);
-                    }
+                if(byte_idx == end_byte) {
+                    mask &= (0xFF << (7 - end_bit));
                 }
-                
                 if(color == EPD_BLACK) {
-                    line_buffer[start_byte + i] &= ~mask;
-                } else {
-                    line_buffer[start_byte + i] |= mask;
+                    line_buffer[byte_idx] &= ~mask;
                 }
             }
         }
         
-        for(int x = 0; x < _width/8; x++) {
+        for(int x = 0; x < bytes_per_line; x++) {
             SPI.transfer(line_buffer[x]);
         }
     }
@@ -275,12 +258,11 @@ void MT_EPD::drawBox(int x_start, int y_start, int width, int height, uint16_t c
     
     delete[] line_buffer;
 
-    // Refresh display
+    // Display Refresh
     sendCommand(0x12);
-    delay(100);
     waitUntilIdle();
     
-    Serial.println("Display refresh complete");
+    Serial.println("Draw complete");
 }
 
 void MT_EPD::reset() {
