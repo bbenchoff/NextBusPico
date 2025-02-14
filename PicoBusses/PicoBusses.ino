@@ -107,22 +107,28 @@ void setup() {
   SPI.begin();
   SPI.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
 
-  delay(100);
-  
   Serial.println("Initializing display...");
-  display.begin();
-  
-  // Clear display
-  display.clearDisplay();
-  delay(1000);
-  
-  // Draw a black box
-  display.drawBox(200, 100, 200, 100, MT_EPD::EPD_BLACK);
-  delay(1000);
-  
-  // Put display to sleep
-  display.sleep();
-
+    display.begin();
+    
+    // Clear display first
+    Serial.println("Clearing display...");
+    display.clearDisplay();
+    delay(2000);
+    
+    // Draw a series of boxes to test bit alignment
+    Serial.println("Drawing test pattern...");
+    // Box aligned to byte boundary
+    display.drawBox(0, 100, 16, 100, MT_EPD::EPD_BLACK);
+    delay(1000);
+    // Box not aligned to byte boundary
+    display.drawBox(20, 100, 10, 100, MT_EPD::EPD_BLACK);
+    delay(1000);
+    // Box spanning multiple bytes
+    display.drawBox(300, 200, 24, 100, MT_EPD::EPD_BLACK);
+    delay(1000);
+    
+    Serial.println("Entering sleep mode...");
+    display.sleep();
   //Start the WiFi
   Serial.print("Initializing WiFI\n");
 
