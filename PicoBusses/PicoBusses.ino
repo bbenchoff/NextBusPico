@@ -86,52 +86,42 @@ void displayArrivals(void);
 
 void setup() {
   Serial.begin(115200);
-  delay(3000);
+  delay(10000);
   Serial.println("EPD Test");
 
-  // Configure pins first
+  // Configure pins
   pinMode(EPD_BS, OUTPUT);
   pinMode(EPD_CS, OUTPUT);
   pinMode(EPD_DC, OUTPUT);
   pinMode(EPD_RST, OUTPUT);
   pinMode(EPD_BUSY, INPUT);
   
-  // Set initial pin states
   digitalWrite(EPD_BS, LOW);   // 4-wire mode
-  digitalWrite(EPD_CS, HIGH);  // Deselect
-  digitalWrite(EPD_DC, HIGH);  // Data mode
-  digitalWrite(EPD_RST, HIGH); // Not in reset
+  digitalWrite(EPD_CS, HIGH);
+  digitalWrite(EPD_DC, HIGH);
+  digitalWrite(EPD_RST, HIGH);
 
   // Configure SPI
   SPI.setSCK(EPD_SCK);
   SPI.setTX(EPD_MOSI);
   SPI.begin();
-  SPI.beginTransaction(SPISettings(2000000, MSBFIRST, SPI_MODE0));
+  SPI.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
 
   delay(100);
-  // Initialize display
+  
+  Serial.println("Initializing display...");
   display.begin();
   
-  // Clear to white
+  // Clear display
   display.clearDisplay();
-  delay(1000);  // Wait for clear to complete
+  delay(1000);
   
-  // Draw test pattern - larger black box
-  for(int i=100; i<300; i++) {
-    for(int j=100; j<300; j++) {
-      display.drawPixel(i, j, MT_EPD::EPD_BLACK);
-    }
-  }
+  // Draw a black box
+  display.drawBox(200, 100, 200, 100, MT_EPD::EPD_BLACK);
+  delay(1000);
   
-  // Draw smaller red box
-  for(int i=400; i<500; i++) {
-    for(int j=200; j<300; j++) {
-      display.drawPixel(i, j, MT_EPD::EPD_RED);
-    }
-  }
-  
-  display.display();
-  Serial.println("Setup complete");
+  // Put display to sleep
+  display.sleep();
 
   //Start the WiFi
   Serial.print("Initializing WiFI\n");
@@ -552,4 +542,3 @@ void displayArrivals() {
   }
   Serial.println(); // Extra line for readability
 }
-
