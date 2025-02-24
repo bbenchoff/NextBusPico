@@ -12,6 +12,8 @@ class MT_EPD {
     void display();
     void sleep();
     void drawBox(int x_start, int y_start, int width, int height, uint16_t color);
+    void sendCommand(uint8_t command);
+    void sendData(uint8_t data);
 
     static const uint16_t EPD_BLACK;
     static const uint16_t EPD_WHITE;
@@ -33,8 +35,6 @@ class MT_EPD {
 
     void waitUntilIdle();
     void reset();
-    void sendCommand(uint8_t command);
-    void sendData(uint8_t data);
     void writeRAM(uint16_t xSize, uint16_t ySize, uint8_t* buffer, uint16_t offset, uint8_t command);
     void setPartialWindow(uint16_t xStart, uint16_t xEnd, uint16_t yStart, uint16_t yEnd);
 };

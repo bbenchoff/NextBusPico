@@ -86,9 +86,9 @@ void displayArrivals(void);
 
 void setup() {
   Serial.begin(115200);
-  delay(10000);
-  Serial.println("EPD Test");
-
+  delay(1000);
+  Serial.println("Starting EPD test");
+  
   // Configure pins
   pinMode(EPD_BS, OUTPUT);
   pinMode(EPD_CS, OUTPUT);
@@ -100,30 +100,60 @@ void setup() {
   digitalWrite(EPD_CS, HIGH);
   digitalWrite(EPD_DC, HIGH);
   digitalWrite(EPD_RST, HIGH);
-
-  // Configure SPI
+  
   SPI.setSCK(EPD_SCK);
   SPI.setTX(EPD_MOSI);
   SPI.begin();
   SPI.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
+  
+display.begin();
+delay(100);
 
+// Calculate buffer size for one-third of the screen
+// Display is 800×480 pixels, so each third is 800×160 pixels
+// Each byte represents 8 pixels, so we need 800×160/8 = 16000 bytes per section
+const int oneThirdBytes = 16000; // One third of the display (in bytes)
+
+// Send data to black/white buffer
+display.sendCommand(0x10);
+
+// First third: Black (0x00)
+for(int i = 0; i < oneThirdBytes; i++) {
+    display.sendData(0x00);  // Black
+}
+
+// Second third: White (0xFF)
+for(int i = 0; i < oneThirdBytes; i++) {
+    display.sendData(0xFF);  // White
+}
+
+// Last third: White for red background (0xFF)
+for(int i = 0; i < oneThirdBytes; i++) {
+    display.sendData(0xFF);  // White (needed for red to show)
+}
+
+// Send data to red buffer
+display.sendCommand(0x13);
+
+// First third: No red (0x00)
+for(int i = 0; i < oneThirdBytes; i++) {
+    display.sendData(0x00);  // No red
+}
+
+// Second third: No red (0x00)
+for(int i = 0; i < oneThirdBytes; i++) {
+    display.sendData(0x00);  // No red
+}
+
+// Last third: Red (0xFF)
+for(int i = 0; i < oneThirdBytes; i++) {
+    display.sendData(0xFF);  // Red
+}
+
+display.display();
+delay(1000);
+display.sleep();
     
-    Serial.println("Initializing display...");
-    display.begin();
-    
-    // Clear display first
-    Serial.println("Clearing display...");
-    display.clearDisplay();
-    delay(2000);
-    
-    // Draw a single test box
-    Serial.println("Drawing test pattern...");
-    display.drawBox(100, 100, 200, 100, MT_EPD::EPD_BLACK);
-    delay(2000);
-    display.display();
-    
-    Serial.println("Entering sleep mode...");
-    display.sleep();
   //Start the WiFi
   Serial.print("Initializing WiFI\n");
 
