@@ -26,10 +26,38 @@ class MT_EPD : public Adafruit_GFX {
     
     // Set physical display orientation
     void setDisplayOrientation(uint8_t orientation);
-    
+    void setPartialWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
+    void displayPartial();
+
+    /**
+    * Sets up a partial update region and updates only that portion of the display
+    * @param x X coordinate of the update region
+    * @param y Y coordinate of the update region
+    * @param w Width of the update region
+    * @param h Height of the update region
+    */
+    void updatePartialWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
+
+    /**
+    * Creates a partial buffer for updates
+    * @param x X coordinate of the buffer region
+    * @param y Y coordinate of the buffer region
+    * @param w Width of the buffer region
+    * @param h Height of the buffer region
+    * @return Pointer to the partial buffer
+    */
+    uint8_t* createPartialBuffer(uint16_t x, uint16_t y, uint16_t w, uint16_t h, size_t* bufferSize);
+
+    void waitUntilIdle();
+        
     static const uint16_t EPD_BLACK = 0x0000;
     static const uint16_t EPD_WHITE = 0xFFFF;
     static const uint16_t EPD_RED = 0xF800;
+
+    // Buffers for black/white and red planes
+    uint8_t* _buffer_bw;
+    uint8_t* _buffer_red;
+    uint32_t _buffer_size;
 
   private:
     int16_t _width;
@@ -39,16 +67,11 @@ class MT_EPD : public Adafruit_GFX {
     int8_t _rst_pin;
     int8_t _busy_pin;
     uint8_t _orientation;  // Physical orientation
-    
-    // Buffers for black/white and red planes
-    uint8_t* _buffer_bw;
-    uint8_t* _buffer_red;
-    uint32_t _buffer_size;
 
     void writeRAM(uint16_t xSize, uint16_t ySize, uint8_t* buffer, uint16_t offset, uint8_t command);
-    void setPartialWindow(uint16_t xStart, uint16_t xEnd, uint16_t yStart, uint16_t yEnd);
+
     
-    void waitUntilIdle();
+
     void reset();
 };
 

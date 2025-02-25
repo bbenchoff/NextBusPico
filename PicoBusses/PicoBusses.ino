@@ -53,6 +53,7 @@ String APIkey = "da03f504-fc16-43e7-a736-319af37570be";
 #include "imagedata.h"
 #include "Globals.h"
 #include "transit_bitmap.h"
+#include "muni_bitmap.h"
 
 #include "MT_EPD.h"
 
@@ -70,7 +71,8 @@ String APIkey = "da03f504-fc16-43e7-a736-319af37570be";
 
 // WiFi credentials
 const char* ssid = "LiveLaughLan";
-const char* password = "666HailSatan!";
+const char* password = "666HailSatanWRONG!";
+//const char* password = "666HailSatan!";
 
 String CurrentTimeToString(time_t time);
 time_t iso8601ToEpoch(String datetime);
@@ -83,6 +85,8 @@ uint32_t getUncompressedLength(const uint8_t* data, size_t dataSize);
 void parseAndFormatBusArrivals(const String& jsonData);
 void removeOldArrivals(void);
 void displayArrivals(void);
+void resetDevice(void);
+bool connectToWiFiWithTimeout(void); 
 
 
 void setup() {
@@ -90,7 +94,7 @@ void setup() {
   delay(1000);
   Serial.println("EPD image test");
   
-  // Configure pins as before
+  // Configure pins
   pinMode(EPD_BS, OUTPUT);
   pinMode(EPD_CS, OUTPUT);
   pinMode(EPD_DC, OUTPUT);
@@ -107,53 +111,39 @@ void setup() {
   SPI.begin();
   SPI.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
   
+  // Initialize display
   display.begin();
-  display.setRotation(1);  // Correct rotation
+  display.setRotation(1);
   display.clearDisplay();
   
   // Draw the bitmap at position (0,0)
+  /* Keeping this here for later, these are the 'rows'
   display.drawBitmap(0, 0, transit_logo_48, 130, 130, MT_EPD::EPD_BLACK);
   display.drawBitmap(0, 135, transit_logo_L, 130, 130, MT_EPD::EPD_BLACK);
   display.drawBitmap(0, 270, transit_logo_LOWL, 130, 130, MT_EPD::EPD_BLACK);
   display.drawBitmap(0, 405, transit_logo_CA, 130, 130, MT_EPD::EPD_BLACK);
   display.drawBitmap(0, 540, transit_logo_714, 130, 130, MT_EPD::EPD_BLACK);
   display.drawBitmap(0, 675, transit_logo_39T, 130, 130, MT_EPD::EPD_BLACK);
+  */
 
+  display.drawBitmap(0, 250, epd_bitmap_Muni_worm_logo, 480, 258, MT_EPD::EPD_RED);
+
+  
+  // Do ONE full update with both logo and initial text
   display.display();
-  delay(2000);
-  display.sleep();
+  // This is important - must fully complete before continuing
+  delay(10000); // Give extra time to ensure display update is complete
   
-  Serial.println("Image display complete!");
-  //Start the WiFi
-  Serial.print("Initializing WiFI\n");
-
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-
-  // Wait for connection
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  // Connect to WiFi with timeout
+  if (!connectToWiFiWithTimeout()) {
+    resetDevice();
+    // This is unreachable code! Wow!
   }
-  
-  Serial.println("\nConnected to WiFi!");
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
-  delay(1000); // give the Ethernet shield a second to initialize:
 
-
-
+  // Figure out the stop codes for all this shit
   for (int i = 0; i < sizeof(stopCodes)/sizeof(stopCodes[0]); i++) {
     stopCodeDataArray[i].stopCode = stopCodes[i];
     stopCodeDataArray[i].arrivalCount = 0; // Initialize the count of arrivals to 0
-  }
-
-
-    Serial.println("Testing connection to Google...");
-  if (!wifiClient.connect("172.217.164.110", 443)) {
-      Serial.println("Failed to connect to Google! Check DNS or network.");
-  } else {
-      Serial.println("Connected to Google successfully!");
   }
 
   Serial.println("finished setup");
@@ -189,6 +179,201 @@ void loop() {
     Serial.println("");
     Serial.println(""); 
   }
+}
+
+void resetDevice() {
+  // Message parameters
+  int textX = 15;
+  int textY = 390;
+  int boxWidth = 300;
+  int boxHeight = 80;
+  
+  // Store current rotation
+  uint8_t currentRotation = display.getRotation();
+  Serial.print("Current rotation: ");
+  Serial.println(currentRotation);
+  
+  // First draw to the buffer with normal rotation
+  display.fillRect(textX, textY, boxWidth, boxHeight, MT_EPD::EPD_WHITE);
+  display.setTextSize(2);
+  display.setTextColor(MT_EPD::EPD_BLACK);
+  display.setCursor(textX + 10, textY + 15);
+  display.print("WiFi not connected");
+  display.setCursor(textX + 10, textY + 45);
+  display.print("Resetting...");
+  
+  // Calculate physical coordinates based on rotation
+  int physicalX, physicalY, physicalWidth, physicalHeight;
+  
+  // Physical dimensions of the display
+  const int PHYSICAL_WIDTH = 800;
+  const int PHYSICAL_HEIGHT = 480;
+  
+  // Transform based on current rotation
+  switch (currentRotation) {
+    case 1: // 90 degrees - X/Y swapped, Y flipped
+      physicalX = textY;
+      physicalY = PHYSICAL_WIDTH - 1 - (textX + boxWidth - 1);
+      physicalWidth = boxHeight;
+      physicalHeight = boxWidth;
+      break;
+    case 2: // 180 degrees - X and Y both flipped
+      physicalX = PHYSICAL_WIDTH - 1 - (textX + boxWidth - 1);
+      physicalY = PHYSICAL_HEIGHT - 1 - (textY + boxHeight - 1);
+      physicalWidth = boxWidth;
+      physicalHeight = boxHeight;
+      break;
+    case 3: // 270 degrees - X/Y swapped, X flipped
+      physicalX = PHYSICAL_HEIGHT - 1 - (textY + boxHeight - 1);
+      physicalY = textX;
+      physicalWidth = boxHeight;
+      physicalHeight = boxWidth;
+      break;
+    default: // 0 degrees - no transform
+      physicalX = textX;
+      physicalY = textY;
+      physicalWidth = boxWidth;
+      physicalHeight = boxHeight;
+      break;
+  }
+  
+  // Debug output
+  Serial.println("Transformed coordinates:");
+  Serial.print("physicalX: "); Serial.println(physicalX);
+  Serial.print("physicalY: "); Serial.println(physicalY);
+  Serial.print("physicalWidth: "); Serial.println(physicalWidth);
+  Serial.print("physicalHeight: "); Serial.println(physicalHeight);
+  
+  // Ensure coordinates are valid
+  if (physicalX < 0) physicalX = 0;
+  if (physicalY < 0) physicalY = 0;
+  if (physicalX + physicalWidth > PHYSICAL_WIDTH) 
+    physicalWidth = PHYSICAL_WIDTH - physicalX;
+  if (physicalY + physicalHeight > PHYSICAL_HEIGHT) 
+    physicalHeight = PHYSICAL_HEIGHT - physicalY;
+  
+  // Direct hardware control for partial update
+  digitalWrite(EPD_CS, LOW);
+  
+  // Enter partial mode
+  display.sendCommand(0x91);
+  
+  // Set partial window
+  display.sendCommand(0x90);
+  display.sendData(physicalX & 0xFF);
+  display.sendData((physicalX >> 8) & 0xFF);
+  display.sendData((physicalX + physicalWidth - 1) & 0xFF);
+  display.sendData(((physicalX + physicalWidth - 1) >> 8) & 0xFF);
+  display.sendData(physicalY & 0xFF);
+  display.sendData((physicalY >> 8) & 0xFF);
+  display.sendData((physicalY + physicalHeight - 1) & 0xFF);
+  display.sendData(((physicalY + physicalHeight - 1) >> 8) & 0xFF);
+  display.sendData(0x01);
+  
+  // Calculate buffer access for this region
+  // Each row is 100 bytes (800 pixels / 8 bits per byte)
+  const int BYTES_PER_ROW = 100;
+  
+  // For debugging - dump a small part of the buffer to see what's there
+  Serial.println("Buffer dump at message area:");
+  for (int y = 0; y < 5; y++) {
+    int rowOffset = (textY + y) * BYTES_PER_ROW;
+    for (int x = 0; x < 5; x++) {
+      int byteOffset = rowOffset + ((textX + x) / 8);
+      Serial.print(display._buffer_bw[byteOffset], HEX);
+      Serial.print(" ");
+    }
+    Serial.println();
+  }
+  
+  // Critically important: Set device back to rotation 0 before sending 
+  // buffer data - this ensures physical coordinates match buffer layout
+  display.setRotation(0);
+  
+  // Now send the buffer data for black/white
+  display.sendCommand(0x10);
+  
+  // Send only the buffer data for our window
+  for (int y = physicalY; y < physicalY + physicalHeight; y++) {
+    int rowOffset = y * BYTES_PER_ROW;
+    int startByte = physicalX / 8;
+    int endByte = (physicalX + physicalWidth + 7) / 8; // Round up
+    
+    for (int x = startByte; x < endByte; x++) {
+      int bufferIdx = rowOffset + x;
+      if (bufferIdx < display._buffer_size) {
+        sendData(display._buffer_bw[bufferIdx]);
+      } else {
+        sendData(0xFF); // White if out of bounds
+      }
+    }
+  }
+  
+  // Send empty red data
+  display.sendCommand(0x13);
+  int bytesPerRow = ((physicalWidth + 7) / 8);
+  int totalBytes = bytesPerRow * physicalHeight;
+  for (int i = 0; i < totalBytes; i++) {
+    display.sendData(0x00);
+  }
+  
+  // Refresh display
+  display.sendCommand(0x12);
+  digitalWrite(EPD_CS, HIGH);
+  
+  // Wait for refresh to complete
+  while (digitalRead(EPD_BUSY) == HIGH) {
+    delay(10);
+  }
+  
+  // Exit partial mode
+  digitalWrite(EPD_CS, LOW);
+  display.sendCommand(0x92);
+  digitalWrite(EPD_CS, HIGH);
+  
+  // Restore original rotation
+  display.setRotation(currentRotation);
+  // Give the user time to read the message
+  delay(60000);
+  
+  // Reset the Pico
+  // Method 1: Use watchdog if available
+  #if defined(ARDUINO_ARCH_RP2040)
+    // Import at the top of your file: #include <pico/stdlib.h>
+    watchdog_enable(1, 1);  // Enable watchdog with 1ms timeout
+    while(1);  // Wait for watchdog to reset
+  #else
+    // Method 2: Software reset for Pico using Arduino
+    NVIC_SystemReset();  // System reset
+  #endif
+}
+
+bool connectToWiFiWithTimeout() {
+  Serial.print("Connecting to WiFi");
+  
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  
+  // Try to connect for 3 minutes (180 seconds)
+  const unsigned long timeout = 180000; // 3 minutes in milliseconds
+  unsigned long startTime = millis();
+  
+  while (WiFi.status() != WL_CONNECTED) {
+    // Check if timed out
+    if (millis() - startTime > timeout) {
+      Serial.println("\nWiFi connection timed out after 3 minutes!");
+      return false;
+    }
+    
+    delay(500);
+    Serial.print(".");
+  }
+  
+  Serial.println("\nConnected to WiFi!");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+  
+  return true;
 }
 
 String CurrentTimeToString(time_t time) {
