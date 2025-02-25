@@ -52,6 +52,7 @@ String APIkey = "da03f504-fc16-43e7-a736-319af37570be";
 #include <ArduinoJson.h>
 #include "imagedata.h"
 #include "Globals.h"
+#include "transit_bitmap.h"
 
 #include "MT_EPD.h"
 
@@ -87,16 +88,16 @@ void displayArrivals(void);
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  Serial.println("Starting EPD test");
+  Serial.println("EPD image test");
   
-  // Configure pins
+  // Configure pins as before
   pinMode(EPD_BS, OUTPUT);
   pinMode(EPD_CS, OUTPUT);
   pinMode(EPD_DC, OUTPUT);
   pinMode(EPD_RST, OUTPUT);
   pinMode(EPD_BUSY, INPUT);
   
-  digitalWrite(EPD_BS, LOW);   // 4-wire mode
+  digitalWrite(EPD_BS, LOW);
   digitalWrite(EPD_CS, HIGH);
   digitalWrite(EPD_DC, HIGH);
   digitalWrite(EPD_RST, HIGH);
@@ -106,54 +107,23 @@ void setup() {
   SPI.begin();
   SPI.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
   
-display.begin();
-delay(100);
+  display.begin();
+  display.setRotation(1);  // Correct rotation
+  display.clearDisplay();
+  
+  // Draw the bitmap at position (0,0)
+  display.drawBitmap(0, 0, transit_logo_48, 130, 130, MT_EPD::EPD_BLACK);
+  display.drawBitmap(0, 135, transit_logo_L, 130, 130, MT_EPD::EPD_BLACK);
+  display.drawBitmap(0, 270, transit_logo_LOWL, 130, 130, MT_EPD::EPD_BLACK);
+  display.drawBitmap(0, 405, transit_logo_CA, 130, 130, MT_EPD::EPD_BLACK);
+  display.drawBitmap(0, 540, transit_logo_714, 130, 130, MT_EPD::EPD_BLACK);
+  display.drawBitmap(0, 675, transit_logo_39T, 130, 130, MT_EPD::EPD_BLACK);
 
-// Calculate buffer size for one-third of the screen
-// Display is 800×480 pixels, so each third is 800×160 pixels
-// Each byte represents 8 pixels, so we need 800×160/8 = 16000 bytes per section
-const int oneThirdBytes = 16000; // One third of the display (in bytes)
-
-// Send data to black/white buffer
-display.sendCommand(0x10);
-
-// First third: Black (0x00)
-for(int i = 0; i < oneThirdBytes; i++) {
-    display.sendData(0x00);  // Black
-}
-
-// Second third: White (0xFF)
-for(int i = 0; i < oneThirdBytes; i++) {
-    display.sendData(0xFF);  // White
-}
-
-// Last third: White for red background (0xFF)
-for(int i = 0; i < oneThirdBytes; i++) {
-    display.sendData(0xFF);  // White (needed for red to show)
-}
-
-// Send data to red buffer
-display.sendCommand(0x13);
-
-// First third: No red (0x00)
-for(int i = 0; i < oneThirdBytes; i++) {
-    display.sendData(0x00);  // No red
-}
-
-// Second third: No red (0x00)
-for(int i = 0; i < oneThirdBytes; i++) {
-    display.sendData(0x00);  // No red
-}
-
-// Last third: Red (0xFF)
-for(int i = 0; i < oneThirdBytes; i++) {
-    display.sendData(0xFF);  // Red
-}
-
-display.display();
-delay(1000);
-display.sleep();
-    
+  display.display();
+  delay(2000);
+  display.sleep();
+  
+  Serial.println("Image display complete!");
   //Start the WiFi
   Serial.print("Initializing WiFI\n");
 

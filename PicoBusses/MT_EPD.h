@@ -3,10 +3,13 @@
 
 #include <Arduino.h>
 #include <SPI.h>
+#include <Adafruit_GFX.h>
 
-class MT_EPD {
+class MT_EPD : public Adafruit_GFX {
   public:
     MT_EPD(int8_t cs, int8_t dc, int8_t rst, int8_t busy);
+    ~MT_EPD(); 
+    
     void begin();
     void clearDisplay();
     void display();
@@ -14,29 +17,39 @@ class MT_EPD {
     void drawBox(int x_start, int y_start, int width, int height, uint16_t color);
     void sendCommand(uint8_t command);
     void sendData(uint8_t data);
-
-    static const uint16_t EPD_BLACK;
-    static const uint16_t EPD_WHITE;
-    static const uint16_t EPD_RED;
+    void transformCoordinates(int16_t &x, int16_t &y);
+    // Required by Adafruit_GFX
+    void drawPixel(int16_t x, int16_t y, uint16_t color) override;
+    void setRotation(uint8_t r) override; // Add this in the public section
+    void drawBitmap(int16_t x, int16_t y, const uint8_t *bitmap, int16_t w, int16_t h, 
+                uint16_t color, uint16_t bg_color = EPD_WHITE);
+    
+    // Set physical display orientation
+    void setDisplayOrientation(uint8_t orientation);
+    
+    static const uint16_t EPD_BLACK = 0x0000;
+    static const uint16_t EPD_WHITE = 0xFFFF;
+    static const uint16_t EPD_RED = 0xF800;
 
   private:
-    static const uint8_t LUT_VCOM[44];
-    static const uint8_t LUT_WW[42];
-    static const uint8_t LUT_BW[42];
-    static const uint8_t LUT_WB[42];
-    static const uint8_t LUT_BB[42];
-
     int16_t _width;
     int16_t _height;
     int8_t _cs_pin;
     int8_t _dc_pin;
     int8_t _rst_pin;
     int8_t _busy_pin;
+    uint8_t _orientation;  // Physical orientation
+    
+    // Buffers for black/white and red planes
+    uint8_t* _buffer_bw;
+    uint8_t* _buffer_red;
+    uint32_t _buffer_size;
 
-    void waitUntilIdle();
-    void reset();
     void writeRAM(uint16_t xSize, uint16_t ySize, uint8_t* buffer, uint16_t offset, uint8_t command);
     void setPartialWindow(uint16_t xStart, uint16_t xEnd, uint16_t yStart, uint16_t yEnd);
+    
+    void waitUntilIdle();
+    void reset();
 };
 
 #endif
