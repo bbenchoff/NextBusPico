@@ -57,6 +57,7 @@ String APIkey = "da03f504-fc16-43e7-a736-319af37570be";
 
 #include "MT_EPD.h"
 
+
 #define COLORED     0
 #define UNCOLORED   1
 
@@ -77,6 +78,7 @@ const char* password = "666HailSatanWRONG!";
 String CurrentTimeToString(time_t time);
 time_t iso8601ToEpoch(String datetime);
 MT_EPD display(EPD_CS, EPD_DC, EPD_RST, EPD_BUSY);
+
 
 void printHexBuffer(const uint8_t* buffer, size_t length);
 void getData(void);
@@ -182,84 +184,72 @@ void loop() {
 }
 
 void resetDevice() {
-  // Message parameters
-  int textX = 15;
-  int textY = 390;
-  int boxWidth = 300;
-  int boxHeight = 80;
-  
-  // Store current rotation
-  uint8_t currentRotation = display.getRotation();
+  // Get current rotation
+  uint8_t originalRotation = display.getRotation();
   Serial.print("Current rotation: ");
-  Serial.println(currentRotation);
+  Serial.println(originalRotation);
   
-  // First draw to the buffer with normal rotation
-  display.fillRect(textX, textY, boxWidth, boxHeight, MT_EPD::EPD_WHITE);
-  display.setTextSize(2);
-  display.setTextColor(MT_EPD::EPD_BLACK);
-  display.setCursor(textX + 10, textY + 15);
-  display.print("WiFi not connected");
-  display.setCursor(textX + 10, textY + 45);
-  display.print("Resetting...");
-  
-  // Calculate physical coordinates based on rotation
-  int physicalX, physicalY, physicalWidth, physicalHeight;
-  
-  // Physical dimensions of the display
+  // Physical dimensions from datasheet
   const int PHYSICAL_WIDTH = 800;
   const int PHYSICAL_HEIGHT = 480;
   
-  // Transform based on current rotation
-  switch (currentRotation) {
-    case 1: // 90 degrees - X/Y swapped, Y flipped
-      physicalX = textY;
-      physicalY = PHYSICAL_WIDTH - 1 - (textX + boxWidth - 1);
-      physicalWidth = boxHeight;
-      physicalHeight = boxWidth;
-      break;
-    case 2: // 180 degrees - X and Y both flipped
-      physicalX = PHYSICAL_WIDTH - 1 - (textX + boxWidth - 1);
-      physicalY = PHYSICAL_HEIGHT - 1 - (textY + boxHeight - 1);
-      physicalWidth = boxWidth;
-      physicalHeight = boxHeight;
-      break;
-    case 3: // 270 degrees - X/Y swapped, X flipped
-      physicalX = PHYSICAL_HEIGHT - 1 - (textY + boxHeight - 1);
-      physicalY = textX;
-      physicalWidth = boxHeight;
-      physicalHeight = boxWidth;
-      break;
-    default: // 0 degrees - no transform
-      physicalX = textX;
-      physicalY = textY;
-      physicalWidth = boxWidth;
-      physicalHeight = boxHeight;
-      break;
-  }
+  // Convert logical coordinates to physical coordinates
+  int textX = 15;
+  int textY = 300;
+  int boxWidth = 300;
+  int boxHeight = 80;
+  
+  // Calculate physical coordinates for rotation 1
+  int physicalX, physicalY, physicalWidth, physicalHeight;
+  
+  // For rotation 1 (90 degrees)
+  physicalX = PHYSICAL_HEIGHT - 1 - textY - boxHeight + 1;
+  physicalY = textX;
+  physicalWidth = boxHeight;
+  physicalHeight = boxWidth;
   
   // Debug output
-  Serial.println("Transformed coordinates:");
+  Serial.println("Physical coordinates:");
   Serial.print("physicalX: "); Serial.println(physicalX);
   Serial.print("physicalY: "); Serial.println(physicalY);
   Serial.print("physicalWidth: "); Serial.println(physicalWidth);
   Serial.print("physicalHeight: "); Serial.println(physicalHeight);
   
-  // Ensure coordinates are valid
-  if (physicalX < 0) physicalX = 0;
-  if (physicalY < 0) physicalY = 0;
-  if (physicalX + physicalWidth > PHYSICAL_WIDTH) 
-    physicalWidth = PHYSICAL_WIDTH - physicalX;
-  if (physicalY + physicalHeight > PHYSICAL_HEIGHT) 
-    physicalHeight = PHYSICAL_HEIGHT - physicalY;
+  // Set rotation temporarily to 0 for drawing directly in physical coordinates
+  display.setRotation(0);
   
-  // Direct hardware control for partial update
-  digitalWrite(EPD_CS, LOW);
+  // Create a very simple and obvious test pattern in the update region
+  display.fillRect(physicalX, physicalY, physicalWidth, physicalHeight, MT_EPD::EPD_WHITE);
   
-  // Enter partial mode
-  display.sendCommand(0x91);
+  // Draw a border around the box to make it obvious
+  display.drawRect(physicalX, physicalY, physicalWidth, physicalHeight, MT_EPD::EPD_BLACK);
   
-  // Set partial window
-  display.sendCommand(0x90);
+  // Draw a diagonal line as a test pattern
+  display.drawLine(physicalX, physicalY, physicalX + physicalWidth - 1, physicalY + physicalHeight - 1, MT_EPD::EPD_BLACK);
+  display.drawLine(physicalX, physicalY + physicalHeight - 1, physicalX + physicalWidth - 1, physicalY, MT_EPD::EPD_BLACK);
+  
+  // Draw a simple pattern of characters that will definitely be visible
+  display.setTextSize(3);  // Larger text size for visibility
+  display.setTextColor(MT_EPD::EPD_BLACK);
+  
+  // Place the text at multiple positions to ensure it's visible somewhere
+  display.setCursor(physicalX + 5, physicalY + 5);
+  display.print("A");
+  
+  display.setCursor(physicalX + 25, physicalY + 25);
+  display.print("B");
+  
+  display.setCursor(physicalX + 45, physicalY + 45);
+  display.print("C");
+  
+  display.setCursor(physicalX + 5, physicalY + physicalHeight - 30);
+  display.print("D");
+  
+  // Now set up for the partial update
+  display.sendCommand(0x91);  // PARTIAL_IN
+  
+  // Set the partial window
+  display.sendCommand(0x90);  // PARTIAL_WINDOW
   display.sendData(physicalX & 0xFF);
   display.sendData((physicalX >> 8) & 0xFF);
   display.sendData((physicalX + physicalWidth - 1) & 0xFF);
@@ -268,71 +258,65 @@ void resetDevice() {
   display.sendData((physicalY >> 8) & 0xFF);
   display.sendData((physicalY + physicalHeight - 1) & 0xFF);
   display.sendData(((physicalY + physicalHeight - 1) >> 8) & 0xFF);
-  display.sendData(0x01);
+  display.sendData(0x01);  // Gate scan both inside and outside
   
-  // Calculate buffer access for this region
-  // Each row is 100 bytes (800 pixels / 8 bits per byte)
-  const int BYTES_PER_ROW = 100;
+  // Calculate buffer access
+  const int BYTES_PER_ROW = PHYSICAL_WIDTH / 8;  // 800 pixels / 8 bits per byte = 100 bytes per row
   
-  // For debugging - dump a small part of the buffer to see what's there
-  Serial.println("Buffer dump at message area:");
-  for (int y = 0; y < 5; y++) {
-    int rowOffset = (textY + y) * BYTES_PER_ROW;
-    for (int x = 0; x < 5; x++) {
-      int byteOffset = rowOffset + ((textX + x) / 8);
-      Serial.print(display._buffer_bw[byteOffset], HEX);
+  // Create a visual debug output of the buffer in the update region
+  Serial.println("Buffer content in update region (1=white, 0=black):");
+  for (int y = physicalY; y < physicalY + 5; y++) {  // Just show first 5 rows
+    Serial.print("Row ");
+    Serial.print(y);
+    Serial.print(": ");
+    
+    for (int xByte = physicalX / 8; xByte < (physicalX + physicalWidth + 7) / 8; xByte++) {
+      int bufferIdx = (y * BYTES_PER_ROW) + xByte;
+      
+      // Print each bit in this byte (1=white, 0=black)
+      for (int bit = 7; bit >= 0; bit--) {
+        bool isWhite = (display._buffer_bw[bufferIdx] & (1 << bit)) != 0;
+        Serial.print(isWhite ? "1" : "0");
+      }
       Serial.print(" ");
     }
     Serial.println();
   }
   
-  // Critically important: Set device back to rotation 0 before sending 
-  // buffer data - this ensures physical coordinates match buffer layout
-  display.setRotation(0);
+  // Send black/white data for the partial window
+  display.sendCommand(0x10);  // DATA_START_TRANSMISSION_1
   
-  // Now send the buffer data for black/white
-  display.sendCommand(0x10);
-  
-  // Send only the buffer data for our window
   for (int y = physicalY; y < physicalY + physicalHeight; y++) {
-    int rowOffset = y * BYTES_PER_ROW;
-    int startByte = physicalX / 8;
-    int endByte = (physicalX + physicalWidth + 7) / 8; // Round up
-    
-    for (int x = startByte; x < endByte; x++) {
-      int bufferIdx = rowOffset + x;
+    for (int xByte = physicalX / 8; xByte < (physicalX + physicalWidth + 7) / 8; xByte++) {
+      int bufferIdx = (y * BYTES_PER_ROW) + xByte;
+      
       if (bufferIdx < display._buffer_size) {
-        sendData(display._buffer_bw[bufferIdx]);
+        display.sendData(display._buffer_bw[bufferIdx]);
       } else {
-        sendData(0xFF); // White if out of bounds
+        display.sendData(0xFF);  // White if out of bounds
       }
     }
   }
   
-  // Send empty red data
-  display.sendCommand(0x13);
+  // Send red data (all zeros for no red)
+  display.sendCommand(0x13);  // DATA_START_TRANSMISSION_2
+  
   int bytesPerRow = ((physicalWidth + 7) / 8);
   int totalBytes = bytesPerRow * physicalHeight;
+  
   for (int i = 0; i < totalBytes; i++) {
-    display.sendData(0x00);
+    display.sendData(0x00);  // No red
   }
   
-  // Refresh display
-  display.sendCommand(0x12);
-  digitalWrite(EPD_CS, HIGH);
-  
-  // Wait for refresh to complete
-  while (digitalRead(EPD_BUSY) == HIGH) {
-    delay(10);
-  }
+  // Refresh the display
+  display.sendCommand(0x12);  // DISPLAY_REFRESH
+  display.waitUntilIdle();
   
   // Exit partial mode
-  digitalWrite(EPD_CS, LOW);
-  display.sendCommand(0x92);
-  digitalWrite(EPD_CS, HIGH);
+  display.sendCommand(0x92);  // PARTIAL_OUT
   
   // Restore original rotation
-  display.setRotation(currentRotation);
+  display.setRotation(originalRotation);
   // Give the user time to read the message
   delay(60000);
   
