@@ -1,7 +1,7 @@
 #ifndef MT_EPD_H
 #define MT_EPD_H
 
-#include "WS_EPD.h"
+//#include "WS_EPD.h"
 
 #include <Arduino.h>
 #include <SPI.h>
@@ -77,15 +77,5 @@ class MT_EPD : public Adafruit_GFX {
     void reset();
 };
 
-class MT_EPD : public WS_EPD {
-public:
-    // Inherit constructors from WS_EPD
-    using WS_EPD::WS_EPD;
-    
-    // Define the same color constants as in MT_EPD
-    static const uint16_t EPD_BLACK = WS_EPD::EPD_BLACK;
-    static const uint16_t EPD_WHITE = WS_EPD::EPD_WHITE;
-    static const uint16_t EPD_RED = WS_EPD::EPD_BLACK; // Map red to black since it's B&W display
-};
 
 #endif

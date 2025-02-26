@@ -72,8 +72,8 @@ String APIkey = "da03f504-fc16-43e7-a736-319af37570be";
 
 // WiFi credentials
 const char* ssid = "LiveLaughLan";
-const char* password = "666HailSatanWRONG!";
-//const char* password = "666HailSatan!";
+//const char* password = "666HailSatanWRONG!";
+const char* password = "666HailSatan!";
 
 String CurrentTimeToString(time_t time);
 time_t iso8601ToEpoch(String datetime);
@@ -138,8 +138,7 @@ void setup() {
   
   // Connect to WiFi with timeout
   if (!connectToWiFiWithTimeout()) {
-    resetDevice();
-    // This is unreachable code! Wow!
+    resetDevice(); // Loop back to the beginning, we're fucked.
   }
 
   // Figure out the stop codes for all this shit
@@ -179,144 +178,29 @@ void loop() {
         Serial.println("No data or failed to fetch data");
     }
     Serial.println("");
-    Serial.println(""); 
+    Serial.println("");
+
+    // This is where we put the display update. It needs to be smart.
+
+
+
   }
 }
 
 void resetDevice() {
-  // Get current rotation
-  uint8_t originalRotation = display.getRotation();
-  Serial.print("Current rotation: ");
-  Serial.println(originalRotation);
-  
-  // Physical dimensions from datasheet
-  const int PHYSICAL_WIDTH = 800;
-  const int PHYSICAL_HEIGHT = 480;
-  
-  // Convert logical coordinates to physical coordinates
-  int textX = 15;
-  int textY = 300;
-  int boxWidth = 300;
-  int boxHeight = 80;
-  
-  // Calculate physical coordinates for rotation 1
-  int physicalX, physicalY, physicalWidth, physicalHeight;
-  
-  // For rotation 1 (90 degrees)
-  physicalX = PHYSICAL_HEIGHT - 1 - textY - boxHeight + 1;
-  physicalY = textX;
-  physicalWidth = boxHeight;
-  physicalHeight = boxWidth;
-  
-  // Debug output
-  Serial.println("Physical coordinates:");
-  Serial.print("physicalX: "); Serial.println(physicalX);
-  Serial.print("physicalY: "); Serial.println(physicalY);
-  Serial.print("physicalWidth: "); Serial.println(physicalWidth);
-  Serial.print("physicalHeight: "); Serial.println(physicalHeight);
-  
-  // Set rotation temporarily to 0 for drawing directly in physical coordinates
-  display.setRotation(0);
-  
-  // Create a very simple and obvious test pattern in the update region
-  display.fillRect(physicalX, physicalY, physicalWidth, physicalHeight, MT_EPD::EPD_WHITE);
-  
-  // Draw a border around the box to make it obvious
-  display.drawRect(physicalX, physicalY, physicalWidth, physicalHeight, MT_EPD::EPD_BLACK);
-  
-  // Draw a diagonal line as a test pattern
-  display.drawLine(physicalX, physicalY, physicalX + physicalWidth - 1, physicalY + physicalHeight - 1, MT_EPD::EPD_BLACK);
-  display.drawLine(physicalX, physicalY + physicalHeight - 1, physicalX + physicalWidth - 1, physicalY, MT_EPD::EPD_BLACK);
-  
-  // Draw a simple pattern of characters that will definitely be visible
-  display.setTextSize(3);  // Larger text size for visibility
-  display.setTextColor(MT_EPD::EPD_BLACK);
-  
-  // Place the text at multiple positions to ensure it's visible somewhere
-  display.setCursor(physicalX + 5, physicalY + 5);
-  display.print("A");
-  
-  display.setCursor(physicalX + 25, physicalY + 25);
-  display.print("B");
-  
-  display.setCursor(physicalX + 45, physicalY + 45);
-  display.print("C");
-  
-  display.setCursor(physicalX + 5, physicalY + physicalHeight - 30);
-  display.print("D");
-  
-  // Now set up for the partial update
-  display.sendCommand(0x91);  // PARTIAL_IN
-  
-  // Set the partial window
-  display.sendCommand(0x90);  // PARTIAL_WINDOW
-  display.sendData(physicalX & 0xFF);
-  display.sendData((physicalX >> 8) & 0xFF);
-  display.sendData((physicalX + physicalWidth - 1) & 0xFF);
-  display.sendData(((physicalX + physicalWidth - 1) >> 8) & 0xFF);
-  display.sendData(physicalY & 0xFF);
-  display.sendData((physicalY >> 8) & 0xFF);
-  display.sendData((physicalY + physicalHeight - 1) & 0xFF);
-  display.sendData(((physicalY + physicalHeight - 1) >> 8) & 0xFF);
-  display.sendData(0x01);  // Gate scan both inside and outside
-  
-  // Calculate buffer access
-  const int BYTES_PER_ROW = PHYSICAL_WIDTH / 8;  // 800 pixels / 8 bits per byte = 100 bytes per row
-  
-  // Create a visual debug output of the buffer in the update region
-  Serial.println("Buffer content in update region (1=white, 0=black):");
-  for (int y = physicalY; y < physicalY + 5; y++) {  // Just show first 5 rows
-    Serial.print("Row ");
-    Serial.print(y);
-    Serial.print(": ");
-    
-    for (int xByte = physicalX / 8; xByte < (physicalX + physicalWidth + 7) / 8; xByte++) {
-      int bufferIdx = (y * BYTES_PER_ROW) + xByte;
-      
-      // Print each bit in this byte (1=white, 0=black)
-      for (int bit = 7; bit >= 0; bit--) {
-        bool isWhite = (display._buffer_bw[bufferIdx] & (1 << bit)) != 0;
-        Serial.print(isWhite ? "1" : "0");
-      }
-      Serial.print(" ");
-    }
-    Serial.println();
-  }
-  
-  // Send black/white data for the partial window
-  display.sendCommand(0x10);  // DATA_START_TRANSMISSION_1
-  
-  for (int y = physicalY; y < physicalY + physicalHeight; y++) {
-    for (int xByte = physicalX / 8; xByte < (physicalX + physicalWidth + 7) / 8; xByte++) {
-      int bufferIdx = (y * BYTES_PER_ROW) + xByte;
-      
-      if (bufferIdx < display._buffer_size) {
-        display.sendData(display._buffer_bw[bufferIdx]);
-      } else {
-        display.sendData(0xFF);  // White if out of bounds
-      }
-    }
-  }
-  
-  // Send red data (all zeros for no red)
-  display.sendCommand(0x13);  // DATA_START_TRANSMISSION_2
-  
-  int bytesPerRow = ((physicalWidth + 7) / 8);
-  int totalBytes = bytesPerRow * physicalHeight;
-  
-  for (int i = 0; i < totalBytes; i++) {
-    display.sendData(0x00);  // No red
-  }
-  
-  // Refresh the display
-  display.sendCommand(0x12);  // DISPLAY_REFRESH
-  display.waitUntilIdle();
-  
-  // Exit partial mode
-  display.sendCommand(0x92);  // PARTIAL_OUT
-  
-  // Restore original rotation
-  display.setRotation(originalRotation);
+  // On occasion of the WiFi not working, need to tell the user.
+  display.begin();
+  display.setCursor(20, 490);
+  display.setTextSize(2);
+  display.setTextColor(0x0000);
+  display.println("WiFi Not Connected!");
+  display.setCursor(20, 510);
+  display.println("Check WiFi credentials");
+  display.setCursor(20, 530);
+  display.println("Resetting...");
+  display.display();
+
+
   // Give the user time to read the message
   delay(60000);
   
@@ -385,7 +269,7 @@ time_t iso8601ToEpoch(String datetime) {
     return makeTime(tm);
 }
 
-// Add the implementation of the helper function
+
 void printHexBuffer(const uint8_t* buffer, size_t length) {
   for (size_t i = 0; i < length; i++) {
     if (buffer[i] < 0x10) {
