@@ -54,9 +54,12 @@ String APIkey = "da03f504-fc16-43e7-a736-319af37570be";
 #include "Globals.h"
 #include "transit_bitmap.h"
 #include "muni_bitmap.h"
+#include "Fonts/FreeSansBold18pt7b.h"
+#include "Fonts/FreeSansBold24pt7b.h"
+#include "Fonts/FreeSans12pt7b.h"
+#include <Adafruit_GFX.h>
 
 #include "MT_EPD.h"
-
 
 #define COLORED     0
 #define UNCOLORED   1
@@ -75,9 +78,23 @@ const char* ssid = "LiveLaughLan";
 //const char* password = "666HailSatanWRONG!";
 const char* password = "666HailSatan!";
 
+struct LineInfo {
+  String lineRef;         // The line number/reference
+  String destination;     // The destination 
+  String stopPoint;       // The stop point
+  bool active;            // Whether this line is active in current update
+};
+
 String CurrentTimeToString(time_t time);
 time_t iso8601ToEpoch(String datetime);
 MT_EPD display(EPD_CS, EPD_DC, EPD_RST, EPD_BUSY);
+
+bool positionsInitialized = false;
+
+LineInfo lineInfoArray[10];
+int lineInfoCount = 0;
+
+const int ROW_HEIGHT = 135;
 
 
 void printHexBuffer(const uint8_t* buffer, size_t length);
@@ -88,7 +105,10 @@ void parseAndFormatBusArrivals(const String& jsonData);
 void removeOldArrivals(void);
 void displayArrivals(void);
 void resetDevice(void);
-bool connectToWiFiWithTimeout(void); 
+bool connectToWiFiWithTimeout(void);
+void collectActiveLines(void);
+void updateDisplay(void);
+const uint8_t* getTransitLogo(String lineRef);
 
 
 void setup() {
@@ -126,6 +146,25 @@ void setup() {
   display.drawBitmap(0, 405, transit_logo_CA, 130, 130, MT_EPD::EPD_BLACK);
   display.drawBitmap(0, 540, transit_logo_714, 130, 130, MT_EPD::EPD_BLACK);
   display.drawBitmap(0, 675, transit_logo_39T, 130, 130, MT_EPD::EPD_BLACK);
+  
+
+  display.drawBitmap(0, 0, transit_logo_48, 130, 130, MT_EPD::EPD_BLACK);
+
+  display.setFont(&FreeSans12pt7b);
+  display.setCursor(135, 25);
+  display.setTextColor(MT_EPD::EPD_BLACK);
+  display.println("To 22nd St + Iowa St");
+
+  display.setFont(&FreeSans12pt7b);
+  display.setCursor(135, 60);
+  display.setTextColor(MT_EPD::EPD_BLACK);
+  display.println("From 39th Ave & Rivera St");
+
+  // Test the FreeSansBold24pt7b font
+  display.setFont(&FreeSansBold24pt7b);
+  display.setCursor(150, 115);
+  display.setTextColor(MT_EPD::EPD_BLACK);
+  display.println("20, 120, 180");
   */
 
   display.drawBitmap(0, 250, epd_bitmap_Muni_worm_logo, 480, 258, MT_EPD::EPD_RED);
@@ -174,16 +213,12 @@ void loop() {
         parseAndFormatBusArrivals(globalUncompressedDataStr);
         displayArrivals();
         currentStopCodeIndex = (currentStopCodeIndex + 1) % (sizeof(stopCodes)/sizeof(stopCodes[0]));
+        updateDisplay();
     } else {
         Serial.println("No data or failed to fetch data");
     }
     Serial.println("");
     Serial.println("");
-
-    // This is where we put the display update. It needs to be smart.
-
-
-
   }
 }
 
@@ -595,4 +630,222 @@ void displayArrivals() {
     }
   }
   Serial.println(); // Extra line for readability
+}
+
+
+
+void collectActiveLines() {
+  // Mark all lines as inactive initially
+  for (int i = 0; i < lineInfoCount; i++) {
+    lineInfoArray[i].active = false;
+  }
+  
+  // Collect all current active lines from arrivals data
+  for (int stopCodeIndex = 0; stopCodeIndex < sizeof(stopCodes) / sizeof(stopCodes[0]); stopCodeIndex++) {
+    for (int arrivalIndex = 0; arrivalIndex < stopCodeDataArray[stopCodeIndex].arrivalCount; arrivalIndex++) {
+      BusArrival& arrival = stopCodeDataArray[stopCodeIndex].arrivals[arrivalIndex];
+      
+      // Check if arrival is in the future
+      time_t expectedArrivalEpoch = iso8601ToEpoch(arrival.expectedArrivalTimeStr);
+      if (expectedArrivalEpoch <= currentTime) continue;
+      
+      // Create a unique key for this line+destination+stop combination
+      String lineKey = arrival.lineRef + "|" + arrival.destinationDisplay + "|" + arrival.stopPointName;
+      
+      // Check if we already have this line in our array
+      bool lineFound = false;
+      for (int i = 0; i < lineInfoCount; i++) {
+        String existingKey = lineInfoArray[i].lineRef + "|" + lineInfoArray[i].destination + "|" + lineInfoArray[i].stopPoint;
+        if (existingKey == lineKey) {
+          // Found existing entry, mark as active
+          lineInfoArray[i].active = true;
+          lineFound = true;
+          break;
+        }
+      }
+      
+      // If not found and we have space, add it
+      if (!lineFound && lineInfoCount < 10) {
+        lineInfoArray[lineInfoCount].lineRef = arrival.lineRef;
+        lineInfoArray[lineInfoCount].destination = arrival.destinationDisplay;
+        lineInfoArray[lineInfoCount].stopPoint = arrival.stopPointName;
+        lineInfoArray[lineInfoCount].active = true;
+        lineInfoCount++;
+      }
+    }
+  }
+}
+
+void updateDisplay() {
+  // First collect all active lines
+  collectActiveLines();
+  
+  // Clear the display
+  display.clearDisplay();
+  
+  // Count how many active lines we have
+  int activeCount = 0;
+  for (int i = 0; i < lineInfoCount; i++) {
+    if (lineInfoArray[i].active) {
+      activeCount++;
+    }
+  }
+  
+  // Calculate how many lines we can display (max 6 due to screen height)
+  int displayCount = min(activeCount, 6);
+  
+  // Display active lines (they will naturally fill from top to bottom)
+  int displayedLines = 0;
+  
+  for (int i = 0; i < lineInfoCount && displayedLines < displayCount; i++) {
+    // Skip inactive lines
+    if (!lineInfoArray[i].active) continue;
+    
+    // Calculate vertical position (lines are stacked from top down)
+    int displayY = displayedLines * ROW_HEIGHT;
+    String lineRef = lineInfoArray[i].lineRef;
+    String destination = lineInfoArray[i].destination;
+    String stopPoint = lineInfoArray[i].stopPoint;
+    
+    // Collect arrival times for this specific line+destination+stop
+    String arrivalTimes = "";
+    
+    // Find all arrival times for this specific line+destination+stop
+    for (int stopCodeIndex = 0; stopCodeIndex < sizeof(stopCodes) / sizeof(stopCodes[0]); stopCodeIndex++) {
+      for (int arrivalIndex = 0; arrivalIndex < stopCodeDataArray[stopCodeIndex].arrivalCount; arrivalIndex++) {
+        BusArrival& arrival = stopCodeDataArray[stopCodeIndex].arrivals[arrivalIndex];
+        
+        // Check if this matches our line info
+        if (arrival.lineRef != lineRef || 
+            arrival.destinationDisplay != destination || 
+            arrival.stopPointName != stopPoint) {
+          continue;
+        }
+        
+        // Check if arrival is in the future
+        time_t expectedArrivalEpoch = iso8601ToEpoch(arrival.expectedArrivalTimeStr);
+        if (expectedArrivalEpoch <= currentTime) continue;
+        
+        // Calculate minutes until arrival
+        long minutesUntilArrival = (expectedArrivalEpoch - currentTime) / 60;
+        
+        // Add to arrival times list
+        if (arrivalTimes.length() > 0) {
+          arrivalTimes += ", ";
+        }
+        arrivalTimes += String(minutesUntilArrival);
+      }
+    }
+    
+    // Only display if we have arrival times
+    if (arrivalTimes.length() > 0) {
+      // Draw the line's logo
+      display.drawBitmap(0, displayY, getTransitLogo(lineRef), 130, 130, MT_EPD::EPD_BLACK);
+      
+      // Draw destination info with FreeSans12pt7b font
+      display.setFont(&FreeSans12pt7b);
+      display.setCursor(135, displayY + 25);
+      display.setTextColor(MT_EPD::EPD_BLACK);
+      display.println("To " + destination);
+      
+      // Draw stop info
+      display.setCursor(135, displayY + 60);
+      display.println("From " + stopPoint);
+      
+      // Draw arrival times in larger FreeSansBold24pt7b font
+      display.setFont(&FreeSansBold24pt7b);
+      display.setCursor(150, displayY + 115);
+      display.println(arrivalTimes);
+      
+      // Increment count of displayed lines
+      displayedLines++;
+    }
+  }
+  
+  // Update the e-paper display
+  display.display();
+}
+
+const uint8_t* getTransitLogo(String lineRef) {
+
+  /* These are the valid lines
+  L 30X FBUS 29 19 1X 23 24 25 27 714 90 28 14R 18 14 2 21
+  22 33 12 36 38R 5 30 44 45 58 35 37 38 31 48 39 49 43 55
+  54 1 57 56 5R 6 8 8BX KBUS F 9R 7 M 66 CA J K N 67 8AX
+  NBUS 15 91 LOWL 9 NOWL T TBUS 52 PH PM 28R
+  */
+
+  // Map line references to appropriate bitmap
+  if (lineRef == "L") return transit_logo_L;
+  else if (lineRef == "30X") return transit_logo_30;
+  else if (lineRef == "FBUS") return transit_logo_F;
+  else if (lineRef == "29") return transit_logo_29;
+  else if (lineRef == "19") return transit_logo_19;
+  else if (lineRef == "1X") return transit_logo_1X;
+  else if (lineRef == "23") return transit_logo_23;
+  else if (lineRef == "24") return transit_logo_24;
+  else if (lineRef == "25") return transit_logo_25;
+  else if (lineRef == "27") return transit_logo_27;
+  else if (lineRef == "714") return transit_logo_714;
+  else if (lineRef == "90") return transit_logo_90;
+  else if (lineRef == "28") return transit_logo_28;
+  else if (lineRef == "14R") return transit_logo_14R;
+  else if (lineRef == "18") return transit_logo_18;
+  else if (lineRef == "14") return transit_logo_14;
+  else if (lineRef == "2") return transit_logo_2;
+  else if (lineRef == "21") return transit_logo_21;
+  else if (lineRef == "22") return transit_logo_22;
+  else if (lineRef == "33") return transit_logo_33;
+  else if (lineRef == "12") return transit_logo_12;
+  else if (lineRef == "36") return transit_logo_36;
+  else if (lineRef == "38R") return transit_logo_38R;
+  else if (lineRef == "5") return transit_logo_5;
+  else if (lineRef == "30") return transit_logo_30;
+  else if (lineRef == "44") return transit_logo_44;
+  else if (lineRef == "45") return transit_logo_45;
+  else if (lineRef == "58") return transit_logo_58;
+  else if (lineRef == "35") return transit_logo_35;
+  else if (lineRef == "37") return transit_logo_37;
+  else if (lineRef == "38") return transit_logo_38;
+  else if (lineRef == "31") return transit_logo_31;
+  else if (lineRef == "48") return transit_logo_48;
+  else if (lineRef == "39") return transit_logo_39T;
+  else if (lineRef == "49") return transit_logo_49;
+  else if (lineRef == "43") return transit_logo_43;
+  else if (lineRef == "55") return transit_logo_55;
+  else if (lineRef == "54") return transit_logo_54;
+  else if (lineRef == "1") return transit_logo_1;
+  else if (lineRef == "57") return transit_logo_57;
+  else if (lineRef == "56") return transit_logo_56;
+  else if (lineRef == "5R") return transit_logo_5R;
+  else if (lineRef == "6") return transit_logo_6;
+  else if (lineRef == "8") return transit_logo_8;
+  else if (lineRef == "8BX") return transit_logo_8BX;
+  else if (lineRef == "KBUS") return transit_logo_KBUS;
+  else if (lineRef == "F") return transit_logo_F;
+  else if (lineRef == "9R") return transit_logo_9R;
+  else if (lineRef == "7") return transit_logo_7;
+  else if (lineRef == "M") return transit_logo_M;
+  else if (lineRef == "66") return transit_logo_66;
+  else if (lineRef == "CA") return transit_logo_CA;
+  else if (lineRef == "J") return transit_logo_J;
+  else if (lineRef == "K") return transit_logo_K;
+  else if (lineRef == "N") return transit_logo_N;
+  else if (lineRef == "67") return transit_logo_67;
+  else if (lineRef == "8AX") return transit_logo_8AX;
+  else if (lineRef == "NBUS") return transit_logo_NBUS;
+  else if (lineRef == "15") return transit_logo_15;
+  else if (lineRef == "91") return transit_logo_91;
+  else if (lineRef == "LOWL") return transit_logo_LOWL;
+  else if (lineRef == "9") return transit_logo_9;
+  else if (lineRef == "NOWL") return transit_logo_NOWL;
+  else if (lineRef == "T") return transit_logo_T;
+  else if (lineRef == "TBUS") return transit_logo_TBUS;
+  else if (lineRef == "52") return transit_logo_52;
+  else if (lineRef == "PH") return transit_logo_PH;
+  else if (lineRef == "PM") return transit_logo_PM;
+  else if (lineRef == "28R") return transit_logo_28R;
+  
+  // Default logo for unknown lines
+  return transit_logo_39T;  // Use a default logo/ the weird coit one
 }
