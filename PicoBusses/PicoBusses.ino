@@ -8,7 +8,7 @@
 //  String stopCodes[] = {"19777", "15301", "13220"};
 //
 // You can find the stop codes for your bus stop by
-// looking at goole maps and clicking on the bus stop
+// looking at google maps and clicking on the bus stop
 // you want to access with this device. Or look at your
 // transit agency's website or something.
 //
@@ -29,15 +29,17 @@ String stopCodes[] = {"13565", "16633"};
 //String stopCodes[] = {"15081", "16068", "16645", "13855", "13889"}; //One block up from each cable car termini
 //String stopCodes[] = {"14114", "16061", "14105"}; // Cable Car and Coit demo
 //String stopCodes[] = {"13124", "13144"}; // The two busiest stops, 3rd St & Folsom St and 3rd St & Bryant St
+//String stopCodes[] = {"16006", "16007", "16921", "18099" }; // Demo at Bob's Donuts
 
 
-// This is your API key. You need a unique one
-// Sign up at https://511.org/open-data/token
-String APIkey = "da03f504-fc16-43e7-a736-319af37570be";
-
-//#define DEBUG_MODE
+// below is config.h; you will need to modify config.template.h
+// and change the name of the file to config.h.
+// config.h holds your wifi credentials and your 511.org API key.
+#include "config.h"
 
 // You should not have to adjust anything below this line.
+
+//#define DEBUG_MODE
 
 #include <SPI.h>
 #include <WiFi.h>
@@ -72,11 +74,6 @@ String APIkey = "da03f504-fc16-43e7-a736-319af37570be";
 #define EPD_MOSI  19  // SPI MOSI
 #define EPD_SCK   18  // SPI Clock
 #define EPD_CS    17  // Chip Select
-
-// WiFi credentials
-const char* ssid = "LiveLaughLan";
-//const char* password = "666HailSatanWRONG!";
-const char* password = "666HailSatan!";
 
 struct LineInfo {
   String lineRef;         // The line number/reference

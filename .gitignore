@@ -1,0 +1,22 @@
+# Ignore actual config file with sensitive information
+config.h
+
+# Ignore build folders
+build/
+.pio/
+.vscode/
+__pycache__/
+
+# Various Arduino build artifacts
+*.hex
+*.elf
+*.bin
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
