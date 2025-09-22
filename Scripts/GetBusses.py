@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 import pytz
 
-url = "https://api.511.org/transit/StopMonitoring?api_key={API KEY}&agency=SF&stopCode=19777"
+url = "https://api.511.org/transit/StopMonitoring?api_key={API KEY}&agency=SF&stopCode=16633"
 
 # Send a GET request to the URL
 response = requests.get(url, headers={'Accept': 'application/xml'})
