@@ -63,6 +63,11 @@ String stopCodes[] = {"13565", "16633"};
 
 #include "MT_EPD.h"
 
+// Hardware watchdog (RP2040 / RP2350) — drives the display watchdog below.
+#if defined(ARDUINO_ARCH_RP2040)
+#include "hardware/watchdog.h"
+#endif
+
 #define COLORED     0
 #define UNCOLORED   1
 
@@ -88,6 +93,49 @@ MT_EPD display(EPD_CS, EPD_DC, EPD_RST, EPD_BUSY);
 
 bool positionsInitialized = false;
 
+// ---- Display watchdog -------------------------------------------------------
+// The screen sometimes freezes for hours: a stuck e-paper BUSY line in
+// waitUntilIdle(), a wedged TLS connect, or a dropped Wi-Fi that makes getData()
+// fail forever while loop() keeps spinning. None of these reach updateDisplay(),
+// so the panel never refreshes again.
+//
+// We arm the hardware watchdog once and feed it from petWatchdog(), which is
+// sprinkled into every place core0 can block for a while (loop(), the WiFi
+// connect loop, the getData() read/retry loops). petWatchdog() only feeds the
+// dog while the screen has refreshed within DISPLAY_STALE_LIMIT_MS;
+// lastDisplayUpdate == 0 keeps us fed through boot. If frames stop coming, the
+// pets stop and the chip resets within WDT_TIMEOUT_MS, rerunning setup().
+//
+// (Earlier versions fed the dog from core1 and then from a timer IRQ. Both were
+// flaky on the Pico 2 W: the CYW43 WiFi driver pauses core1 via multicore
+// lockout, and the IRQ feeder didn't reliably fire during boot. Plain inline
+// pets from core0 always run, so this is the dependable approach.)
+//
+// Set USE_DISPLAY_WATCHDOG to 0 to compile the watchdog out entirely.
+#define USE_DISPLAY_WATCHDOG 1
+
+const unsigned long DISPLAY_STALE_LIMIT_MS = 5UL * 60UL * 1000UL; // ~5 minutes
+const uint32_t WDT_TIMEOUT_MS = 12000;  // > worst-case blocking op (TLS connect); within RP2350 limit
+volatile unsigned long lastDisplayUpdate = 0; // millis() of last display.display()
+
+// Feed the watchdog, but only while the screen is still refreshing (or we're in
+// the boot grace window). Safe to call anywhere; compiles to nothing when off.
+inline void petWatchdog() {
+#if defined(ARDUINO_ARCH_RP2040) && USE_DISPLAY_WATCHDOG
+  if ((millis() - lastDisplayUpdate) < DISPLAY_STALE_LIMIT_MS) {
+    watchdog_update();
+  }
+#endif
+}
+
+// Arm the hardware watchdog. Called once, early in setup().
+inline void startDisplayWatchdog() {
+#if defined(ARDUINO_ARCH_RP2040) && USE_DISPLAY_WATCHDOG
+  watchdog_enable(WDT_TIMEOUT_MS, true);
+  watchdog_update();
+#endif
+}
+
 LineInfo lineInfoArray[10];
 int lineInfoCount = 0;
 
@@ -112,7 +160,12 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
   Serial.println("EPD image test");
-  
+  Serial.println(">>> BUILD CHECK: inline-watchdog + immediate-fetch (rev C) <<<");
+
+  // Arm the watchdog up front. lastDisplayUpdate is still 0, so petWatchdog()
+  // stays in its boot grace window until the first real frame sets the clock.
+  startDisplayWatchdog();
+
   // Configure pins
   pinMode(EPD_BS, OUTPUT);
   pinMode(EPD_CS, OUTPUT);
@@ -169,9 +222,11 @@ void setup() {
   
   // Do ONE full update with both logo and initial text
   display.display();
-  // This is important - must fully complete before continuing
-  delay(10000); // Give extra time to ensure display update is complete
-  
+  lastDisplayUpdate = millis();  // first real frame: anchors the watchdog's stale clock
+  petWatchdog();
+  // waitUntilIdle() already blocked until the panel finished; a short settle is plenty
+  delay(1000);
+
   // Connect to WiFi with timeout
   if (!connectToWiFiWithTimeout()) {
     resetDevice(); // Loop back to the beginning, we're fucked.
@@ -188,19 +243,25 @@ void setup() {
 }
   
 void loop() {
+  petWatchdog();  // feed the watchdog whenever the screen is healthy
 
-  int counter = 0;
-  unsigned long currentMillis;
-  currentMillis = millis(); // capture the current time
+  static bool firstFetch = true;          // fetch right away on boot, don't wait 65 s
+  unsigned long currentMillis = millis(); // capture the current time
 
-  if (currentMillis - previousMillis >= interval) { // check if 65 seconds have passed
+  if (firstFetch || (currentMillis - previousMillis >= interval)) { // first run, or 65 s elapsed
+    firstFetch = false;
     previousMillis = currentMillis;
-    
+
+    Serial.print("Fetching stopCode ");
+    Serial.println(stopCodeDataArray[currentStopCodeIndex].stopCode);
     getData(stopCodeDataArray[currentStopCodeIndex].stopCode);
     #ifdef DEBUG_MODE
     Serial.println(CurrentTimeToString(currentTime));
     #endif
     removeOldArrivals();
+
+    Serial.print("Data length: ");
+    Serial.println(globalUncompressedDataStr.length());
 
     if (globalUncompressedDataStr.length() > 0) {
         #ifdef DEBUG_MODE
@@ -219,6 +280,8 @@ void loop() {
   }
 }
 
+// (watchdog feeder lives up top now — see petWatchdog() / startDisplayWatchdog())
+
 void resetDevice() {
   // On occasion of the WiFi not working, need to tell the user.
   display.begin();
@@ -231,19 +294,19 @@ void resetDevice() {
   display.setCursor(20, 530);
   display.println("Resetting...");
   display.display();
+  lastDisplayUpdate = millis();  // keep the watchdog from rebooting us before the message is read
 
+  // Give the user time to read the message, feeding the dog so it doesn't cut this short
+  for (int i = 0; i < 60; i++) {
+    petWatchdog();
+    delay(1000);
+  }
 
-  // Give the user time to read the message
-  delay(60000);
-  
   // Reset the Pico
-  // Method 1: Use watchdog if available
   #if defined(ARDUINO_ARCH_RP2040)
-    // Import at the top of your file: #include <pico/stdlib.h>
-    watchdog_enable(1, 1);  // Enable watchdog with 1ms timeout
+    watchdog_enable(1, 1);  // 1ms timeout; the while(1) below never pets, so we reboot
     while(1);  // Wait for watchdog to reset
   #else
-    // Method 2: Software reset for Pico using Arduino
     NVIC_SystemReset();  // System reset
   #endif
 }
@@ -259,6 +322,7 @@ bool connectToWiFiWithTimeout() {
   unsigned long startTime = millis();
   
   while (WiFi.status() != WL_CONNECTED) {
+    petWatchdog();
     // Check if timed out
     if (millis() - startTime > timeout) {
       Serial.println("\nWiFi connection timed out after 3 minutes!");
@@ -327,6 +391,7 @@ void getData(String stopCode) {
   #endif
 
   while (!requestSuccess && retryCount < maxRetries) {
+    petWatchdog();
     // Make sure we start with a fresh connection
     client.stop();
     delay(100);  // Give it a moment to clean up
@@ -368,6 +433,7 @@ void getData(String stopCode) {
     unsigned long timeout = millis();
     
     while (client.connected() && (millis() - timeout < 5000)) {
+      petWatchdog();
       while (client.available()) {
         char c = client.read();
         response += c;
@@ -761,6 +827,7 @@ void updateDisplay() {
   
   // Update the e-paper display
   display.display();
+  lastDisplayUpdate = millis();  // pet the display watchdog: a fresh frame was drawn
 }
 
 const uint8_t* getTransitLogo(String lineRef) {
